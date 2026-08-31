@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Duka+ API — Status & Admin Console</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --border: #2d3a4f;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --green: #22c55e;
+      --red: #ef4444;
+      --amber: #f59e0b;
+      --brand: #6264a7;
+      --brand-light: #7b7fd4;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: radial-gradient(ellipse at top, #1e2a3a 0%, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+    header { margin-bottom: 2rem; }
+    header h1 { font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em; }
+    header p { color: var(--muted); margin-top: 0.35rem; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      padding: 0.35rem 0.75rem; border-radius: 999px; font-size: 0.8rem; font-weight: 700;
+      border: 1px solid var(--border); background: var(--card);
+    }
+    .badge.ok { color: var(--green); border-color: rgba(34,197,94,.35); }
+    .badge.bad { color: var(--red); border-color: rgba(239,68,68,.35); }
+    .badge.warn { color: var(--amber); border-color: rgba(245,158,11,.35); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .grid { display: grid; gap: 1rem; }
+    .grid-4 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 1.25rem;
+    }
+    .card h2 { font-size: 0.95rem; color: var(--muted); font-weight: 600; margin-bottom: 0.5rem; }
+    .card .value { font-size: 1.35rem; font-weight: 800; }
+    .card .sub { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
+    section { margin-top: 2rem; }
+    section > h2 {
+      font-size: 1.1rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;
+    }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.3rem; }
+    input, select {
+      width: 100%; padding: 0.6rem 0.75rem; border-radius: 8px;
+      border: 1px solid var(--border); background: #111827; color: var(--text);
+      font-size: 0.9rem; margin-bottom: 0.75rem;
+    }
+    input:focus, select:focus { outline: 2px solid var(--brand-light); border-color: var(--brand); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+    button {
+      border: none; border-radius: 8px; padding: 0.65rem 1rem;
+      font-weight: 700; cursor: pointer; font-size: 0.9rem;
+    }
+    .btn-primary { background: var(--brand); color: white; }
+    .btn-primary:hover { background: var(--brand-light); }
+    .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+    .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+    .msg { padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.85rem; margin-top: 0.75rem; display: none; }
+    .msg.show { display: block; }
+    .msg.ok { background: rgba(34,197,94,.12); color: #86efac; border: 1px solid rgba(34,197,94,.25); }
+    .msg.err { background: rgba(239,68,68,.12); color: #fca5a5; border: 1px solid rgba(239,68,68,.25); }
+    .links { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1.5rem; }
+    .links a { color: var(--brand-light); text-decoration: none; font-size: 0.85rem; }
+    .links a:hover { text-decoration: underline; }
+    .hidden { display: none !important; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 0.75rem; }
+    th, td { text-align: left; padding: 0.5rem 0.35rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; }
+    .auth-bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+      flex-wrap: wrap; margin-bottom: 1rem;
+    }
+    .auth-bar span { font-size: 0.85rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+        <div>
+          <h1>Duka+ API</h1>
+          <p>Platform status, health checks & super-admin console</p>
+        </div>
+        <div id="overall-badge" class="badge warn"><span class="dot"></span> Checking…</div>
+      </div>
+      <div class="links">
+        <a href="/docs" target="_blank">API Docs (Swagger)</a>
+        <a href="/redoc" target="_blank">ReDoc</a>
+        <a href="/api/health" target="_blank">Health JSON</a>
+        <a href="/api/health/detailed" target="_blank">Detailed Health</a>
+      </div>
+    </header>
+
+    <div class="grid grid-4" id="status-grid">
+      <div class="card"><h2>API</h2><div class="value" id="api-status">—</div><div class="sub">Application server</div></div>
+      <div class="card"><h2>Database</h2><div class="value" id="db-status">—</div><div class="sub" id="db-latency">Latency —</div></div>
+      <div class="card"><h2>Environment</h2><div class="value" id="env-name">—</div><div class="sub" id="app-version">Version —</div></div>
+      <div class="card"><h2>Tenants</h2><div class="value" id="tenant-count">—</div><div class="sub">Registered businesses</div></div>
+    </div>
+
+    <section id="login-section">
+      <h2>Super Admin Sign In</h2>
+      <div class="card" style="max-width:420px;">
+        <label for="login-email">Email</label>
+        <input id="login-email" type="email" placeholder="admin@dukaplus.co.tz" autocomplete="username" />
+        <label for="login-password">Password</label>
+        <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password" />
+        <div class="actions">
+          <button class="btn-primary" id="login-btn" type="button">Sign In</button>
+        </div>
+        <div id="login-msg" class="msg"></div>
+      </div>
+    </section>
+
+    <section id="admin-section" class="hidden">
+      <div class="auth-bar">
+        <h2 style="margin:0">Admin Console</h2>
+        <div>
+          <span id="admin-user-label">Signed in</span>
+          <button class="btn-ghost" id="logout-btn" type="button" style="margin-left:0.5rem;">Sign Out</button>
+        </div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <h2 style="color:var(--text);font-size:1rem;margin-bottom:1rem;">Create Business Account</h2>
+          <div class="row">
+            <div><label>Business Name</label><input id="t-business" placeholder="Duka la Rehema" /></div>
+            <div><label>Business Type</label>
+              <select id="t-type">
+                <option value="retail">Retail</option><option value="pharmacy">Pharmacy</option>
+                <option value="supermarket">Supermarket</option><option value="restaurant">Restaurant</option>
+                <option value="hardware">Hardware</option><option value="electronics">Electronics</option>
+                <option value="fashion">Fashion</option><option value="mixed">Mixed</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div><label>Owner Name</label><input id="t-owner" placeholder="Salum Omar" /></div>
+            <div><label>Phone</label><input id="t-phone" placeholder="+255712345678" /></div>
+          </div>
+          <label>Owner Email (login)</label>
+          <input id="t-email" type="email" placeholder="owner@example.co.tz" />
+          <label>Password</label>
+          <input id="t-password" type="password" placeholder="Min 6 characters" />
+          <div class="row">
+            <div><label>Region</label><input id="t-region" value="Dar es Salaam" /></div>
+            <div><label>District</label><input id="t-district" placeholder="Ilala" /></div>
+          </div>
+          <div class="row">
+            <div><label>Plan</label>
+              <select id="t-plan">
+                <option value="free_starter">Free Starter</option>
+                <option value="biashara_pro">Biashara Pro</option>
+                <option value="enterprise_chain">Enterprise</option>
+              </select>
+            </div>
+            <div><label>Status</label>
+              <select id="t-status">
+                <option value="active">Active</option>
+                <option value="pending_kyc">Pending KYC</option>
+              </select>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn-primary" id="create-tenant-btn" type="button">Create Account</button>
+          </div>
+          <div id="tenant-msg" class="msg"></div>
+        </div>
+
+        <div class="card">
+          <h2 style="color:var(--text);font-size:1rem;margin-bottom:1rem;">Create Super Admin</h2>
+          <label>Name</label>
+          <input id="sa-name" placeholder="Platform Operator" />
+          <label>Email</label>
+          <input id="sa-email" type="email" placeholder="ops@dukaplus.co.tz" />
+          <label>Phone</label>
+          <input id="sa-phone" placeholder="+255700000002" />
+          <label>Password</label>
+          <input id="sa-password" type="password" placeholder="Min 6 characters" />
+          <div class="actions">
+            <button class="btn-primary" id="create-sa-btn" type="button">Create Super Admin</button>
+          </div>
+          <div id="sa-msg" class="msg"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:1rem;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+          <h2 style="color:var(--text);font-size:1rem;margin:0;">Recent Tenants</h2>
+          <button class="btn-ghost" id="refresh-tenants-btn" type="button">Refresh</button>
+        </div>
+        <table>
+          <thead><tr><th>Business</th><th>Owner</th><th>Type</th><th>Status</th><th>Plan</th></tr></thead>
+          <tbody id="tenants-body"><tr><td colspan="5" style="color:var(--muted)">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const TOKEN_KEY = 'dukaplus_admin_token';
+    let accessToken = localStorage.getItem(TOKEN_KEY) || '';
+
+    function showMsg(el, text, ok) {
+      el.textContent = text;
+      el.className = 'msg show ' + (ok ? 'ok' : 'err');
+    }
+
+    function authHeaders() {
+      return accessToken ? { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+    }
+
+    async function refreshStatus() {
+      const badge = document.getElementById('overall-badge');
+      try {
+        const res = await fetch('/api/health/detailed');
+        const data = await res.json();
+        const ok = data.status === 'ok';
+        badge.className = 'badge ' + (ok ? 'ok' : 'bad');
+        badge.innerHTML = '<span class="dot"></span> ' + (ok ? 'All systems operational' : 'Degraded');
+
+        document.getElementById('api-status').textContent = data.checks?.api?.status === 'ok' ? 'Online' : 'Error';
+        document.getElementById('db-status').textContent = data.checks?.database?.status === 'ok' ? 'Connected' : 'Error';
+        document.getElementById('db-latency').textContent = data.checks?.database?.latency_ms != null
+          ? 'Latency ' + data.checks.database.latency_ms + ' ms · ' + (data.checks.database.engine || 'db')
+          : (data.checks?.database?.message || 'Unavailable');
+        document.getElementById('env-name').textContent = data.environment || '—';
+        document.getElementById('app-version').textContent = (data.app || 'Duka+ API') + ' v' + (data.version || '—');
+        document.getElementById('tenant-count').textContent = data.checks?.database?.tenant_count ?? '—';
+      } catch (e) {
+        badge.className = 'badge bad';
+        badge.innerHTML = '<span class="dot"></span> Unreachable';
+        document.getElementById('api-status').textContent = 'Offline';
+        document.getElementById('db-status').textContent = '—';
+      }
+    }
+
+    function updateAuthUI() {
+      const loggedIn = !!accessToken;
+      document.getElementById('login-section').classList.toggle('hidden', loggedIn);
+      document.getElementById('admin-section').classList.toggle('hidden', !loggedIn);
+      if (loggedIn) loadTenants();
+    }
+
+    document.getElementById('login-btn').addEventListener('click', async () => {
+      const msg = document.getElementById('login-msg');
+      try {
+        const res = await fetch('/api/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: document.getElementById('login-email').value.trim(),
+            password: document.getElementById('login-password').value,
+            device_info: 'admin-console',
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Login failed');
+
+        const meRes = await fetch('/api/v1/auth/me', { headers: { Authorization: 'Bearer ' + data.access_token } });
+        const me = await meRes.json();
+        if (me.role !== 'super_admin') throw new Error('Super admin access required');
+
+        accessToken = data.access_token;
+        localStorage.setItem(TOKEN_KEY, accessToken);
+        document.getElementById('admin-user-label').textContent = me.name + ' · ' + me.email;
+        showMsg(msg, 'Signed in successfully', true);
+        updateAuthUI();
+      } catch (e) {
+        showMsg(msg, e.message || 'Login failed', false);
+      }
+    });
+
+    document.getElementById('logout-btn').addEventListener('click', () => {
+      accessToken = '';
+      localStorage.removeItem(TOKEN_KEY);
+      updateAuthUI();
+    });
+
+    async function loadTenants() {
+      const body = document.getElementById('tenants-body');
+      try {
+        const res = await fetch('/api/v1/admin/tenants', { headers: authHeaders() });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Failed to load tenants');
+        if (!data.length) {
+          body.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No tenants yet</td></tr>';
+          return;
+        }
+        body.innerHTML = data.slice(0, 12).map(t => `
+          <tr>
+            <td>${escapeHtml(t.name)}</td>
+            <td>${escapeHtml(t.owner_name)}<br><span style="color:var(--muted);font-size:0.75rem">${escapeHtml(t.owner_email)}</span></td>
+            <td>${escapeHtml(t.business_type)}</td>
+            <td>${escapeHtml(t.status)}</td>
+            <td>${escapeHtml(t.plan)}</td>
+          </tr>`).join('');
+      } catch (e) {
+        body.innerHTML = '<tr><td colspan="5" style="color:#fca5a5">' + escapeHtml(e.message) + '</td></tr>';
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    document.getElementById('refresh-tenants-btn').addEventListener('click', loadTenants);
+
+    document.getElementById('create-tenant-btn').addEventListener('click', async () => {
+      const msg = document.getElementById('tenant-msg');
+      const payload = {
+        business_name: document.getElementById('t-business').value.trim(),
+        owner_name: document.getElementById('t-owner').value.trim(),
+        email: document.getElementById('t-email').value.trim(),
+        phone: document.getElementById('t-phone').value.trim(),
+        password: document.getElementById('t-password').value,
+        business_type: document.getElementById('t-type').value,
+        region: document.getElementById('t-region').value.trim(),
+        district: document.getElementById('t-district').value.trim(),
+        plan: document.getElementById('t-plan').value,
+        status: document.getElementById('t-status').value,
+      };
+      try {
+        const res = await fetch('/api/v1/admin/tenants', {
+          method: 'POST', headers: authHeaders(), body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail));
+        showMsg(msg, 'Account created: ' + data.name + ' (' + data.owner_email + ')', true);
+        loadTenants();
+        refreshStatus();
+      } catch (e) {
+        showMsg(msg, e.message, false);
+      }
+    });
+
+    document.getElementById('create-sa-btn').addEventListener('click', async () => {
+      const msg = document.getElementById('sa-msg');
+      const payload = {
+        name: document.getElementById('sa-name').value.trim(),
+        email: document.getElementById('sa-email').value.trim(),
+        phone: document.getElementById('sa-phone').value.trim(),
+        password: document.getElementById('sa-password').value,
+      };
+      try {
+        const res = await fetch('/api/v1/admin/users/super-admin', {
+          method: 'POST', headers: authHeaders(), body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail));
+        showMsg(msg, data.message + ': ' + data.email, true);
+      } catch (e) {
+        showMsg(msg, e.message, false);
+      }
+    });
+
+    refreshStatus();
+    setInterval(refreshStatus, 30000);
+    updateAuthUI();
+    if (accessToken) {
+      fetch('/api/v1/auth/me', { headers: authHeaders() })
+        .then(r => r.json())
+        .then(me => {
+          if (me.role === 'super_admin') {
+            document.getElementById('admin-user-label').textContent = me.name + ' · ' + me.email;
+          } else {
+            accessToken = '';
+            localStorage.removeItem(TOKEN_KEY);
+            updateAuthUI();
+          }
+        })
+        .catch(() => { accessToken = ''; localStorage.removeItem(TOKEN_KEY); updateAuthUI(); });
+    }
+  </script>
+</body>
+</html>
