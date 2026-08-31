@@ -10,17 +10,46 @@
 
 ## Required Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `DATABASE_URL` | Auto-linked from Railway Postgres (`postgresql://...`) |
+Set these on your **backend API service** (not on the Postgres service):
+
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | `${{ Postgres.DATABASE_PRIVATE_URL }}` |
 | `SECRET_KEY` | Long random string for JWT signing |
-| `ENVIRONMENT` | Set to `production` |
+| `ENVIRONMENT` | `production` |
 | `CORS_ORIGINS` | Your frontend URL(s), comma-separated |
 | `SUPER_ADMIN_EMAIL` | Platform admin login email |
 | `SUPER_ADMIN_PASSWORD` | Strong password (not `admin123`) |
-| `SEED_DEMO_DATA` | Set to `false` in production |
+| `SEED_DEMO_DATA` | `false` |
 
-Railway sets `PORT` automatically — do not override it.
+### Linking Postgres on Railway
+
+1. Create a **PostgreSQL** service in the same project.
+2. Open your **backend** service → **Variables**.
+3. Click **+ New Variable** → **Add Reference**.
+4. Select the Postgres service → choose **`DATABASE_PRIVATE_URL`**.
+5. Name the variable **`DATABASE_URL`** (our app reads this name).
+
+Or paste manually:
+
+```
+DATABASE_URL=${{ Postgres.DATABASE_PRIVATE_URL }}
+```
+
+> **Important:** `Postgres` must match your Postgres **service name** in Railway exactly (case-sensitive). If you renamed it to `postgres`, use `${{ postgres.DATABASE_PRIVATE_URL }}`.
+
+**Private vs public URL**
+
+| Reference | When to use |
+|-----------|-------------|
+| `DATABASE_PRIVATE_URL` | Backend + DB in same Railway project (**recommended**) |
+| `DATABASE_URL` | External tools or if private networking fails |
+
+The backend auto-converts `postgresql://…` → `postgresql+asyncpg://…` for async SQLAlchemy.
+
+Railway sets `PORT` automatically — the app reads it via `scripts/start.sh`. Do not hardcode `--port $PORT` in Procfile (Railway may pass it literally).
+
+If deploy fails with `'$PORT' is not a valid integer`, redeploy after pulling the latest `scripts/start.sh` fix.
 
 ## Health Checks
 

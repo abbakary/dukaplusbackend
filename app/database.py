@@ -11,8 +11,7 @@ class Base(DeclarativeBase):
 
 
 def _engine_connect_args() -> dict:
-    url = settings.async_database_url.lower()
-    if url.startswith("postgresql") and "sslmode=require" in url:
+    if settings.database_ssl_required:
         return {"ssl": "require"}
     return {}
 

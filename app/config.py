@@ -1,13 +1,24 @@
+from urllib.parse import parse_qs, urlparse, urlunparse
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-def normalize_database_url(url: str) -> str:
-    """Convert Railway/Heroku postgres URLs to async SQLAlchemy drivers."""
+def normalize_database_url(url: str) -> tuple[str, bool]:
+    """Convert Railway/Heroku postgres URLs to async SQLAlchemy + asyncpg."""
     if url.startswith("postgres://"):
-        return "postgresql+asyncpg://" + url[len("postgres://") :]
-    if url.startswith("postgresql://") and "+asyncpg" not in url and "+psycopg" not in url:
-        return "postgresql+asyncpg://" + url[len("postgresql://") :]
-    return url
+        url = "postgresql://" + url[len("postgres://") :]
+
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    needs_ssl = query.get("sslmode", [""])[0].lower() in {"require", "verify-full", "verify-ca"}
+
+    # asyncpg does not accept libpq query params like sslmode on the URL
+    clean = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", parsed.fragment))
+
+    if clean.startswith("postgresql://") and "+asyncpg" not in clean and "+psycopg" not in clean:
+        clean = "postgresql+asyncpg://" + clean[len("postgresql://") :]
+
+    return clean, needs_ssl
 
 
 class Settings(BaseSettings):
@@ -35,7 +46,13 @@ class Settings(BaseSettings):
 
     @property
     def async_database_url(self) -> str:
-        return normalize_database_url(self.database_url)
+        url, _ = normalize_database_url(self.database_url)
+        return url
+
+    @property
+    def database_ssl_required(self) -> bool:
+        _, needs_ssl = normalize_database_url(self.database_url)
+        return needs_ssl
 
     @property
     def cors_origins_list(self) -> list[str]:
