@@ -1,1 +1,1 @@
-web: sh scripts/start.sh
+web: python run.py

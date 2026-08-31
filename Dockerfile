@@ -15,10 +15,9 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app ./app
+COPY run.py ./run.py
 COPY scripts ./scripts
-
-RUN chmod +x ./scripts/start.sh
 
 EXPOSE 8000
 
-CMD ["./scripts/start.sh"]
+CMD ["python", "run.py"]

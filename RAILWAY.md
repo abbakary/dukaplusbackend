@@ -47,9 +47,21 @@ DATABASE_URL=${{ Postgres.DATABASE_PRIVATE_URL }}
 
 The backend auto-converts `postgresql://…` → `postgresql+asyncpg://…` for async SQLAlchemy.
 
-Railway sets `PORT` automatically — the app reads it via `scripts/start.sh`. Do not hardcode `--port $PORT` in Procfile (Railway may pass it literally).
+## Fix: `'$PORT' is not a valid integer`
 
-If deploy fails with `'$PORT' is not a valid integer`, redeploy after pulling the latest `scripts/start.sh` fix.
+Railway must **not** use a custom start command like `uvicorn ... --port $PORT`.
+
+1. Open your backend service in Railway → **Settings** → **Deploy**
+2. Find **Custom Start Command** / **Start Command**
+3. **Clear it completely** (leave empty) **OR** set exactly:
+   ```
+   python run.py
+   ```
+4. Redeploy
+
+The app uses `run.py` which reads `PORT` in Python — no shell `$PORT` expansion needed.
+
+Railway sets `PORT` automatically at runtime.
 
 ## Health Checks
 
