@@ -1,5 +1,7 @@
+import os
 from urllib.parse import parse_qs, urlparse, urlunparse
 
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +21,28 @@ def normalize_database_url(url: str) -> tuple[str, bool]:
         clean = "postgresql+asyncpg://" + clean[len("postgresql://") :]
 
     return clean, needs_ssl
+
+
+def _pick_database_url(explicit: object) -> str:
+    """Resolve DB URL from explicit value or common Railway env vars."""
+    candidates: list[str] = []
+    if isinstance(explicit, str) and explicit.strip():
+        candidates.append(explicit.strip())
+
+    for key in (
+        "DATABASE_URL",
+        "DATABASE_PRIVATE_URL",
+        "POSTGRES_URL",
+        "POSTGRES_PRIVATE_URL",
+        "PGDATABASE_URL",
+    ):
+        env_val = os.environ.get(key, "").strip()
+        if env_val and env_val not in candidates:
+            candidates.append(env_val)
+
+    if candidates:
+        return candidates[0]
+    return "sqlite+aiosqlite:///./dukaplus.db"
 
 
 class Settings(BaseSettings):
@@ -43,6 +67,23 @@ class Settings(BaseSettings):
     super_admin_password: str = "admin123"
     super_admin_name: str = "Platform Admin"
     super_admin_phone: str = "+255700000001"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def resolve_database_url(cls, v: object) -> str:
+        return _pick_database_url(v)
+
+    @model_validator(mode="after")
+    def validate_production_database(self) -> "Settings":
+        url = self.database_url.strip()
+        if self.is_production and (not url or url.startswith("sqlite")):
+            raise ValueError(
+                "DATABASE_URL is empty or missing in production. "
+                "In Railway → dukaplusbackend service → Variables → Add Reference → "
+                "select your Postgres service → DATABASE_PRIVATE_URL → name it DATABASE_URL. "
+                "Then redeploy."
+            )
+        return self
 
     @property
     def async_database_url(self) -> str:

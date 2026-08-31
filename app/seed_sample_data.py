@@ -42,6 +42,24 @@ DEMO_PASSWORD = "demo123"
 SAMPLE_EMAIL_DOMAIN = "@sample.dukaplus.co.tz"
 SEED_MARKER = "sample.dukaplus.co.tz"
 
+# Per-tenant demo volume (dashboard-rich for each staff role)
+PRODUCTS_PER_TENANT = 30
+CUSTOMERS_PER_TENANT = 30
+SALES_PER_TENANT = 30
+SUPPLIERS_PER_TENANT = 10
+EXPENSES_PER_TENANT = 10
+CALENDAR_EVENTS_PER_TENANT = 8
+
+# Featured tenants (6 business types) get extra staff roles for role-based demos
+FEATURED_SLUGS = {
+    "kariakoo-pharmacy",
+    "mlimani-mart",
+    "mbezi-retail",
+    "sinza-hardware",
+    "slipway-restaurant",
+    "samora-electronics",
+}
+
 REGIONS = [
     ("Dar es Salaam", "Ilala"),
     ("Dar es Salaam", "Kinondoni"),
@@ -368,8 +386,15 @@ async def seed_sample_data() -> None:
 
             catalog = PRODUCT_CATALOG.get(biz_type, PRODUCT_CATALOG[BusinessType.retail])
             products: list[Product] = []
-            for pidx, (pname, category, price, cost, stock, unit) in enumerate(catalog):
+            for pidx in range(PRODUCTS_PER_TENANT):
+                base = catalog[pidx % len(catalog)]
+                pname, category, price, cost, stock, unit = base
+                if pidx >= len(catalog):
+                    batch = pidx // len(catalog) + 1
+                    pname = f"{pname} — Var {batch}"
                 sku = f"{slug[:6].upper()}-{pidx + 1:03d}"
+                price_var = round(price * (0.92 + (pidx % 7) * 0.02), 0)
+                stock_var = max(5, int(stock * (0.7 + (pidx % 5) * 0.1)))
                 product = Product(
                     tenant_id=tenant.id,
                     branch_id=branch.id,
@@ -377,27 +402,29 @@ async def seed_sample_data() -> None:
                     category=category,
                     sku=sku,
                     barcode=f"628{idx:04d}{pidx:05d}",
-                    price=price,
+                    price=price_var,
                     cost=cost,
-                    stock=stock,
-                    reorder_point=max(5, stock * 0.2),
+                    stock=stock_var,
+                    reorder_point=max(5, stock_var * 0.2),
                     unit=unit,
                     business_type=biz_type,
-                    requires_prescription=biz_type == BusinessType.pharmacy and pidx == 1,
+                    requires_prescription=biz_type == BusinessType.pharmacy and pidx % len(catalog) == 1,
                 )
                 db.add(product)
                 products.append(product)
             await db.flush()
 
             customers: list[Customer] = []
-            for cidx in range(4):
+            for cidx in range(CUSTOMERS_PER_TENANT):
                 cname = customer_pool[(idx * 4 + cidx) % len(customer_pool)]
-                balance = rng.choice([0, 0, 0, 15000, 35000, 85000])
+                if cidx >= len(customer_pool):
+                    cname = f"{cname} {cidx + 1}"
+                balance = rng.choice([0, 0, 0, 15000, 35000, 85000, 120000])
                 customer = Customer(
                     tenant_id=tenant.id,
                     name=cname,
-                    phone=_phone(40000000 + idx * 10 + cidx),
-                    email=f"{cname.split()[0].lower()}.{slug}@mail.co.tz",
+                    phone=_phone(40000000 + idx * 100 + cidx),
+                    email=f"customer{cidx}.{slug}@mail.co.tz",
                     address=f"{district}, {region}",
                     credit_limit=rng.choice([100000, 200000, 500000]),
                     balance=balance,
@@ -408,7 +435,7 @@ async def seed_sample_data() -> None:
                 customers.append(customer)
             await db.flush()
 
-            for sidx in range(3):
+            for sidx in range(SALES_PER_TENANT):
                 cust = rng.choice(customers)
                 prod = rng.choice(products)
                 qty = rng.randint(1, 3)
@@ -418,7 +445,7 @@ async def seed_sample_data() -> None:
                 total = subtotal + vat
                 paid = total if sidx < 2 else 0
                 status = "completed" if paid >= total else "pending_completion"
-                sale_date = datetime.now(UTC) - timedelta(days=rng.randint(0, 28))
+                sale_date = datetime.now(UTC) - timedelta(days=rng.randint(0, 60), hours=rng.randint(0, 12))
 
                 sale = Sale(
                     tenant_id=tenant.id,
@@ -447,7 +474,7 @@ async def seed_sample_data() -> None:
                 )
                 db.add(sale)
 
-            for sup_idx in range(2):
+            for sup_idx in range(SUPPLIERS_PER_TENANT):
                 db.add(Supplier(
                     tenant_id=tenant.id,
                     name=SUPPLIER_NAMES[(idx + sup_idx) % len(SUPPLIER_NAMES)],
@@ -484,10 +511,11 @@ async def seed_sample_data() -> None:
                     total_amount=po_total,
                 ))
 
-            for eidx, (title, category, amount) in enumerate(EXPENSE_TITLES[idx % 5 : idx % 5 + 2]):
+            for eidx in range(EXPENSES_PER_TENANT):
+                title, category, amount = EXPENSE_TITLES[eidx % len(EXPENSE_TITLES)]
                 db.add(Expense(
                     tenant_id=tenant.id,
-                    title=title,
+                    title=title if eidx < len(EXPENSE_TITLES) else f"{title} #{eidx + 1}",
                     category=category,
                     amount=amount * rng.uniform(0.8, 1.2),
                     payment_method=rng.choice(["cash_drawer", "mpesa", "bank"]),
@@ -495,7 +523,7 @@ async def seed_sample_data() -> None:
                     status="paid",
                 ))
 
-            for ev_idx in range(2):
+            for ev_idx in range(CALENDAR_EVENTS_PER_TENANT):
                 ev_date = (datetime.now(UTC) + timedelta(days=ev_idx * 7 + idx)).strftime("%Y-%m-%d")
                 db.add(CalendarEvent(
                     tenant_id=tenant.id,

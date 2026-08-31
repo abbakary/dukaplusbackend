@@ -25,6 +25,6 @@ async def seed_demo_data() -> None:
             ))
         await db.commit()
 
-    if settings.seed_demo_data and not settings.is_production:
+    if settings.seed_demo_data:
         await seed_sample_data()
         await seed_login_aliases()

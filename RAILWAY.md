@@ -20,32 +20,36 @@ Set these on your **backend API service** (not on the Postgres service):
 | `CORS_ORIGINS` | Your frontend URL(s), comma-separated |
 | `SUPER_ADMIN_EMAIL` | Platform admin login email |
 | `SUPER_ADMIN_PASSWORD` | Strong password (not `admin123`) |
-| `SEED_DEMO_DATA` | `false` |
+| `SEED_DEMO_DATA` | `true` to load 20 demo shops (30+ products/sales each) |
 
 ### Linking Postgres on Railway
 
-1. Create a **PostgreSQL** service in the same project.
-2. Open your **backend** service → **Variables**.
-3. Click **+ New Variable** → **Add Reference**.
-4. Select the Postgres service → choose **`DATABASE_PRIVATE_URL`**.
-5. Name the variable **`DATABASE_URL`** (our app reads this name).
-
-Or paste manually:
+**This crash means `DATABASE_URL` is empty:**
 
 ```
-DATABASE_URL=${{ Postgres.DATABASE_PRIVATE_URL }}
+Could not parse SQLAlchemy URL from string ''
 ```
 
-> **Important:** `Postgres` must match your Postgres **service name** in Railway exactly (case-sensitive). If you renamed it to `postgres`, use `${{ postgres.DATABASE_PRIVATE_URL }}`.
+1. Open **dukaplusbackend** service (not Postgres) → **Variables**
+2. **Delete** any `DATABASE_URL` that is blank or shows `${{...}}` unresolved
+3. Click **+ New Variable** → **Add Reference** (or **Reference Variable**)
+4. Select your **Postgres** service
+5. Choose **`DATABASE_PRIVATE_URL`**
+6. Set variable name to **`DATABASE_URL`**
+7. Click **Deploy** / redeploy
 
-**Private vs public URL**
+Also set:
+
+```
+ENVIRONMENT=production
+```
+
+**Do not** paste `${{ Postgres.DATABASE_PRIVATE_URL }}` manually unless the Postgres service is literally named `Postgres`. Use **Add Reference** instead — Railway resolves it correctly.
 
 | Reference | When to use |
 |-----------|-------------|
 | `DATABASE_PRIVATE_URL` | Backend + DB in same Railway project (**recommended**) |
-| `DATABASE_URL` | External tools or if private networking fails |
-
-The backend auto-converts `postgresql://…` → `postgresql+asyncpg://…` for async SQLAlchemy.
+| `DATABASE_URL` | Public URL if private networking fails |
 
 ## Fix: `'$PORT' is not a valid integer`
 
@@ -126,6 +130,53 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 Open http://localhost:8000 for the admin console.
+
+## Demo sample data on Railway (PostgreSQL)
+
+Sample data is skipped unless `SEED_DEMO_DATA=true`.
+
+### Option A — Auto-seed on deploy (recommended)
+
+On **dukaplusbackend** → **Variables**:
+
+```
+SEED_DEMO_DATA=true
+```
+
+Redeploy. First startup creates **20 demo tenants** with **30 products, 30 customers, 30 sales** each, plus staff users for every role (Owner, Manager, Cashier, etc.).
+
+Verify: `GET /api/health/detailed` → `tenant_count` should be **20+**.
+
+### Option B — Railway Console
+
+**dukaplusbackend** → **Console**:
+
+```bash
+python scripts/run_seed.py
+```
+
+### Option C — Super admin API
+
+```bash
+curl -X POST https://dukaplusbackend-production.up.railway.app/api/v1/admin/seed-demo \
+  -H "Authorization: Bearer YOUR_SUPER_ADMIN_TOKEN"
+```
+
+### Demo logins (password: `demo123`)
+
+| Email | Type | Role |
+|-------|------|------|
+| `pharmacy@sample.dukaplus.co.tz` | Pharmacy | Owner |
+| `retail@sample.dukaplus.co.tz` | Retail | Owner |
+| `restaurant@sample.dukaplus.co.tz` | Restaurant | Owner |
+| `hardware@sample.dukaplus.co.tz` | Hardware | Owner |
+| `electronics@sample.dukaplus.co.tz` | Electronics | Owner |
+| `supermarket@sample.dukaplus.co.tz` | Supermarket | Owner |
+| `manager.kariakoo-pharmacy@sample.dukaplus.co.tz` | Pharmacy | Manager |
+| `cashier.mbezi-retail@sample.dukaplus.co.tz` | Retail | Cashier |
+| `admin@dukaplus.co.tz` | Platform | Super Admin |
+
+Point your React app to Railway and sign in with any account above.
 
 ## Frontend Connection
 

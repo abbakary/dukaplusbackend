@@ -9,11 +9,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.core.deps import require_roles
 from app.core.security import get_user_by_email, hash_password
 from app.database import get_db
 from app.models import Customer, PlatformShowcaseItem, Product, SaaSPlanTier, Sale, Tenant, TenantStatus, User, UserRole
 from app.schemas import RegisterRequest
+from app.seed_sample_data import DEMO_PASSWORD, SEED_MARKER, seed_login_aliases, seed_sample_data
 from app.services.account_service import create_tenant_with_owner
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -224,6 +226,53 @@ async def create_super_admin(
         "name": new_admin.name,
         "role": new_admin.role.value,
         "message": "Super admin account created",
+    }
+
+
+@router.post("/seed-demo")
+async def seed_demo_data(
+    user: Annotated[User, Depends(require_roles(UserRole.super_admin))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Load demo tenants, products, sales, and role-based users (idempotent)."""
+    if settings.is_production and not settings.seed_demo_data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Set SEED_DEMO_DATA=true on Railway to enable demo seeding in production",
+        )
+
+    await seed_sample_data()
+    await seed_login_aliases()
+
+    sample_tenants = await db.scalar(
+        select(func.count(Tenant.id)).where(Tenant.owner_email.like(f"%{SEED_MARKER}"))
+    ) or 0
+    sample_users = await db.scalar(
+        select(func.count(User.id)).where(User.email.like(f"%{SEED_MARKER}"))
+    ) or 0
+    products = await db.scalar(select(func.count(Product.id))) or 0
+    sales = await db.scalar(select(func.count(Sale.id))) or 0
+
+    return {
+        "message": "Demo seed complete",
+        "sample_tenants": int(sample_tenants),
+        "sample_users": int(sample_users),
+        "total_products": int(products),
+        "total_sales": int(sales),
+        "demo_password": DEMO_PASSWORD,
+        "logins": {
+            "super_admin": settings.super_admin_email,
+            "short_aliases": [
+                "pharmacy@sample.dukaplus.co.tz",
+                "retail@sample.dukaplus.co.tz",
+                "restaurant@sample.dukaplus.co.tz",
+                "hardware@sample.dukaplus.co.tz",
+                "electronics@sample.dukaplus.co.tz",
+                "supermarket@sample.dukaplus.co.tz",
+            ],
+            "staff_pattern": "{role}.{slug}@sample.dukaplus.co.tz",
+            "owner_pattern": "owner.{slug}@sample.dukaplus.co.tz",
+        },
     }
 
 
