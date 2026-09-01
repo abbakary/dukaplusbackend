@@ -11,6 +11,7 @@ from app.database import init_db
 from app.health import check_database, get_system_status
 from app.seed import seed_demo_data
 from app.seed_plans import seed_platform_plans
+from app.seed_provider_data import seed_provider_data
 from app.seed_showcase import seed_platform_showcase
 
 CONSOLE_HTML = (Path(__file__).resolve().parent / "static" / "console.html").read_text(encoding="utf-8")
@@ -21,6 +22,8 @@ async def lifespan(app: FastAPI):
     await init_db()
     await seed_demo_data()
     await seed_platform_plans()
+    if settings.seed_demo_data:
+        await seed_provider_data()
     await seed_platform_showcase()
     yield
 

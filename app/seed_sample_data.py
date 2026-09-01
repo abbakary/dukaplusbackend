@@ -309,6 +309,7 @@ async def seed_sample_data() -> None:
                 plan=spec.get("plan", PLANS[idx % len(PLANS)]),
                 status=TenantStatus.active if idx % 5 != 4 else TenantStatus.pending_kyc,
                 tra_efd_serial=f"EFD-{secrets.token_hex(4).upper()}",
+                subscription_expiry=datetime.now(UTC) + timedelta(days=30 + idx * 3),
             )
             db.add(tenant)
             await db.flush()

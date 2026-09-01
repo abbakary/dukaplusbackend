@@ -143,9 +143,17 @@ On **dukaplusbackend** → **Variables**:
 SEED_DEMO_DATA=true
 ```
 
-Redeploy. First startup creates **20 demo tenants** with **30 products, 30 customers, 30 sales** each, plus staff users for every role (Owner, Manager, Cashier, etc.).
+Redeploy. First startup creates **20 demo tenants** with **30 products, 30 customers, 30 sales** each, plus staff users for every role (Owner, Manager, Cashier, etc.). It also seeds **subscription expiry dates**, **M-Pesa payment history**, and **provider broadcasts** for the super admin portal.
 
 Verify: `GET /api/health/detailed` → `tenant_count` should be **20+**.
+
+Super admin is created automatically (idempotent):
+
+| Variable | Default |
+|----------|---------|
+| `SUPER_ADMIN_EMAIL` | `admin@dukaplus.co.tz` |
+| `SUPER_ADMIN_PASSWORD` | `admin123` (set a strong value on Railway) |
+| `SUPER_ADMIN_NAME` | `Platform Admin` |
 
 ### Option B — Railway Console
 
@@ -174,7 +182,7 @@ curl -X POST https://dukaplusbackend-production.up.railway.app/api/v1/admin/seed
 | `supermarket@sample.dukaplus.co.tz` | Supermarket | Owner |
 | `manager.kariakoo-pharmacy@sample.dukaplus.co.tz` | Pharmacy | Manager |
 | `cashier.mbezi-retail@sample.dukaplus.co.tz` | Retail | Cashier |
-| `admin@dukaplus.co.tz` | Platform | Super Admin |
+| `admin@dukaplus.co.tz` | Platform | Super Admin (`demo123` only if you set `SUPER_ADMIN_PASSWORD=demo123`; default `admin123`) |
 
 Point your React app to Railway and sign in with any account above.
 

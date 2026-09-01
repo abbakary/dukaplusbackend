@@ -13,8 +13,9 @@ from app.config import settings
 from app.core.deps import require_roles
 from app.core.security import get_user_by_email, hash_password
 from app.database import get_db
-from app.models import Customer, PlatformPlan, PlatformShowcaseItem, Product, SaaSPlanTier, Sale, Tenant, TenantStatus, User, UserRole
+from app.models import Customer, PlatformBroadcast, PlatformPlan, PlatformShowcaseItem, Product, SaaSPlanTier, Sale, SubscriptionPayment, Tenant, TenantStatus, User, UserRole
 from app.schemas import RegisterRequest
+from app.seed_provider_data import seed_provider_data
 from app.seed_sample_data import DEMO_PASSWORD, SEED_MARKER, seed_login_aliases, seed_sample_data
 from app.services.account_service import create_tenant_with_owner
 
@@ -279,6 +280,7 @@ async def seed_demo_data(
 
     await seed_sample_data()
     await seed_login_aliases()
+    await seed_provider_data()
 
     sample_tenants = await db.scalar(
         select(func.count(Tenant.id)).where(Tenant.owner_email.like(f"%{SEED_MARKER}"))
@@ -288,6 +290,8 @@ async def seed_demo_data(
     ) or 0
     products = await db.scalar(select(func.count(Product.id))) or 0
     sales = await db.scalar(select(func.count(Sale.id))) or 0
+    payments = await db.scalar(select(func.count(SubscriptionPayment.id))) or 0
+    broadcasts = await db.scalar(select(func.count(PlatformBroadcast.id))) or 0
 
     return {
         "message": "Demo seed complete",
@@ -295,6 +299,8 @@ async def seed_demo_data(
         "sample_users": int(sample_users),
         "total_products": int(products),
         "total_sales": int(sales),
+        "subscription_payments": int(payments),
+        "platform_broadcasts": int(broadcasts),
         "demo_password": DEMO_PASSWORD,
         "logins": {
             "super_admin": settings.super_admin_email,
