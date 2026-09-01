@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
@@ -8,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.security import decode_token
+from app.core.subscription import subscription_allows_api_access, subscription_status_message, sync_tenant_subscription_state
 from app.database import get_db
-from app.models import StaffMember, Tenant, User, UserRole
+from app.models import User, UserRole
 
 security = HTTPBearer(auto_error=False)
 
@@ -47,6 +47,29 @@ async def get_optional_user(
         return await get_current_user(credentials, db)
     except HTTPException:
         return None
+
+
+async def require_vendor_subscription(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User:
+    """Block vendor API when subscription is overdue (past grace) or suspended."""
+    if user.role == UserRole.super_admin:
+        return user
+    tenant = user.tenant
+    if not tenant:
+        return user
+    await sync_tenant_subscription_state(tenant, db)
+    if not subscription_allows_api_access(tenant):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "subscription_required",
+                "message": subscription_status_message(tenant),
+                "status": tenant.status.value,
+            },
+        )
+    return user
 
 
 def require_roles(*roles: UserRole):

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_user_permissions
+from app.core.subscription import sync_tenant_subscription_state, subscription_status_message
 from app.core.security import (
     create_access_token,
     create_refresh_token_value,
@@ -38,6 +39,8 @@ def _build_user_response(user: User) -> UserResponse:
         status_val = "pending"
     elif tenant and tenant.status == TenantStatus.suspended:
         status_val = "rejected"
+    elif tenant and tenant.status == TenantStatus.grace_period:
+        status_val = "grace"
 
     return UserResponse(
         id=user.id,
@@ -68,6 +71,9 @@ async def login(body: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)]
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
+
+    if user.tenant:
+        await sync_tenant_subscription_state(user.tenant, db)
 
     user.last_login = datetime.now(UTC)
     access = create_access_token({"sub": user.id, "role": user.role.value, "tenant_id": user.tenant_id})

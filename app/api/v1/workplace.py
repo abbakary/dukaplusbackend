@@ -9,11 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.business_profiles import get_business_profile
-from app.core.deps import get_current_user, require_tenant
+from app.core.deps import get_current_user, require_tenant, require_vendor_subscription
 from app.database import get_db
 from app.models import Branch, TenantWorkplaceState, User
 
-router = APIRouter(prefix="/workplace", tags=["workplace"])
+router = APIRouter(prefix="/workplace", tags=["workplace"], dependencies=[Depends(require_vendor_subscription)])
 
 NOW = lambda: datetime.now(timezone.utc).isoformat()
 DEFAULT_BRANCH_KEY = "hq"

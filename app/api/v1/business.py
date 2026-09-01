@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 
-from app.core.deps import get_current_user, get_user_permissions, require_permission, require_tenant
+from app.core.deps import get_current_user, get_user_permissions, require_permission, require_tenant, require_vendor_subscription
 
 from app.core.ttl_cache import cache_get, cache_set, invalidate_tenant_cache, tenant_cache_key
 
@@ -68,7 +68,7 @@ from app.services.transaction_service import create_sale_transaction, finalize_s
 
 
 
-router = APIRouter(tags=["business"])
+router = APIRouter(tags=["business"], dependencies=[Depends(require_vendor_subscription)])
 
 
 

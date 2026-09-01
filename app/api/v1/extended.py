@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, get_user_permissions, require_permission, require_tenant
+from app.core.deps import get_current_user, get_user_permissions, require_permission, require_tenant, require_vendor_subscription
 from app.core.security import DEFAULT_PERMISSIONS, hash_password
 from app.database import get_db
 from app.models import (
@@ -23,7 +23,7 @@ from app.models import (
     UserRole,
 )
 
-router = APIRouter(tags=["extended"])
+router = APIRouter(tags=["extended"], dependencies=[Depends(require_vendor_subscription)])
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────

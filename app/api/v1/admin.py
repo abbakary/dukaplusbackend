@@ -433,6 +433,28 @@ async def suspend_tenant(
     )
 
 
+@router.post("/tenants/{tenant_id}/reactivate", response_model=TenantAdminOut)
+async def reactivate_tenant(
+    tenant_id: str,
+    user: Annotated[User, Depends(require_roles(UserRole.super_admin))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    return await update_tenant_status(
+        tenant_id, TenantStatusUpdate(status="active"), user, db
+    )
+
+
+@router.post("/tenants/{tenant_id}/grace", response_model=TenantAdminOut)
+async def set_grace_period(
+    tenant_id: str,
+    user: Annotated[User, Depends(require_roles(UserRole.super_admin))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    return await update_tenant_status(
+        tenant_id, TenantStatusUpdate(status="grace_period"), user, db
+    )
+
+
 class ShowcaseItemOut(BaseModel):
     id: str
     title: str
