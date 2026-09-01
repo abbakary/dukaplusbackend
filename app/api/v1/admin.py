@@ -15,11 +15,34 @@ from app.core.security import get_user_by_email, hash_password
 from app.database import get_db
 from app.models import Customer, PlatformBroadcast, PlatformPlan, PlatformShowcaseItem, Product, SaaSPlanTier, Sale, SubscriptionPayment, Tenant, TenantStatus, User, UserRole
 from app.schemas import RegisterRequest
+from app.seed import ensure_super_admin
 from app.seed_provider_data import seed_provider_data
 from app.seed_sample_data import DEMO_PASSWORD, SEED_MARKER, seed_login_aliases, seed_sample_data
 from app.services.account_service import create_tenant_with_owner
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+@router.post("/bootstrap/super-admin")
+async def bootstrap_super_admin(
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Create or reset the platform super admin from env (no auth — use after fresh deploy).
+
+    Safe to call when login fails on Railway. Password comes from ``SUPER_ADMIN_PASSWORD``.
+    """
+    result = await ensure_super_admin()
+    email = str(result.get("email") or settings.super_admin_email)
+    exists = await db.scalar(select(func.count(User.id)).where(User.email == email.strip().lower()))
+    if not exists:
+        raise HTTPException(status_code=500, detail="Super admin bootstrap failed")
+    return {
+        "message": "Super admin ready",
+        "email": email,
+        "created": result.get("created", False),
+        "password_synced": result.get("password_synced", False),
+        "hint": "Login with SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD from Railway variables",
+    }
 
 
 class TenantAdminOut(BaseModel):

@@ -77,7 +77,8 @@ async def revoke_refresh_token(db: AsyncSession, token: str) -> bool:
 
 
 async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
-    result = await db.execute(select(User).where(User.email == email))
+    normalized = email.strip().lower()
+    result = await db.execute(select(User).where(User.email == normalized))
     return result.scalar_one_or_none()
 
 

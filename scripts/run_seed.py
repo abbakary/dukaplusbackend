@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import settings
 from app.database import init_db
-from app.seed import seed_demo_data
+from app.seed import ensure_super_admin, seed_demo_data
 from app.seed_sample_data import DEMO_PASSWORD, SEED_MARKER
 from sqlalchemy import func, select
 from app.database import AsyncSessionLocal
@@ -19,6 +19,8 @@ from app.models import Product, Sale, Tenant, User
 
 async def main() -> None:
     await init_db()
+    admin = await ensure_super_admin()
+    print(f"Super admin bootstrap: {admin}")
     await seed_demo_data()
 
     async with AsyncSessionLocal() as db:

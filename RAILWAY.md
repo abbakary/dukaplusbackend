@@ -20,6 +20,7 @@ Set these on your **backend API service** (not on the Postgres service):
 | `CORS_ORIGINS` | Your frontend URL(s), comma-separated |
 | `SUPER_ADMIN_EMAIL` | Platform admin login email |
 | `SUPER_ADMIN_PASSWORD` | Strong password (not `admin123`) |
+| `SUPER_ADMIN_SYNC_PASSWORD` | `true` (default) — sync password from env on each deploy |
 | `SEED_DEMO_DATA` | `true` to load 20 demo shops (30+ products/sales each) |
 
 ### Linking Postgres on Railway
@@ -147,13 +148,24 @@ Redeploy. First startup creates **20 demo tenants** with **30 products, 30 custo
 
 Verify: `GET /api/health/detailed` → `tenant_count` should be **20+**.
 
-Super admin is created automatically (idempotent):
+Super admin is created automatically on every deploy (idempotent):
 
 | Variable | Default |
 |----------|---------|
 | `SUPER_ADMIN_EMAIL` | `admin@dukaplus.co.tz` |
 | `SUPER_ADMIN_PASSWORD` | `admin123` (set a strong value on Railway) |
+| `SUPER_ADMIN_SYNC_PASSWORD` | `true` — keeps login password in sync with env |
 | `SUPER_ADMIN_NAME` | `Platform Admin` |
+
+**Login fails with 401?** Check Railway variables, then call:
+
+```bash
+curl -X POST https://dukaplusbackend-production.up.railway.app/api/v1/admin/bootstrap/super-admin
+```
+
+Then sign in with `SUPER_ADMIN_EMAIL` + `SUPER_ADMIN_PASSWORD` exactly as set on Railway (not `demo123`).
+
+Verify: `GET /api/health/detailed` → `bootstrap_super_admin_exists` should be `true`.
 
 ### Option B — Railway Console
 
@@ -182,7 +194,7 @@ curl -X POST https://dukaplusbackend-production.up.railway.app/api/v1/admin/seed
 | `supermarket@sample.dukaplus.co.tz` | Supermarket | Owner |
 | `manager.kariakoo-pharmacy@sample.dukaplus.co.tz` | Pharmacy | Manager |
 | `cashier.mbezi-retail@sample.dukaplus.co.tz` | Retail | Cashier |
-| `admin@dukaplus.co.tz` | Platform | Super Admin (`demo123` only if you set `SUPER_ADMIN_PASSWORD=demo123`; default `admin123`) |
+| `admin@dukaplus.co.tz` | Platform | Super Admin — use `SUPER_ADMIN_PASSWORD` from Railway (not `demo123`) |
 
 Point your React app to Railway and sign in with any account above.
 

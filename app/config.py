@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     super_admin_password: str = "admin123"
     super_admin_name: str = "Platform Admin"
     super_admin_phone: str = "+255700000001"
+    super_admin_sync_password: bool = True
 
     @field_validator("database_url", mode="before")
     @classmethod

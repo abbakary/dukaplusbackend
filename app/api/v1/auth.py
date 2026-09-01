@@ -63,7 +63,7 @@ def _build_user_response(user: User) -> UserResponse:
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)]):
-    user = await get_user_by_email(db, body.email)
+    user = await get_user_by_email(db, body.email.strip().lower())
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
     if not user.is_active:

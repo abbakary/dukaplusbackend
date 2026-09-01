@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,12 +16,17 @@ from app.seed_provider_data import seed_provider_data
 from app.seed_showcase import seed_platform_showcase
 
 CONSOLE_HTML = (Path(__file__).resolve().parent / "static" / "console.html").read_text(encoding="utf-8")
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    await seed_demo_data()
+    try:
+        await seed_demo_data()
+    except Exception:
+        logger.exception("Startup seed failed")
+        raise
     await seed_platform_plans()
     if settings.seed_demo_data:
         await seed_provider_data()
