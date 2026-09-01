@@ -5,8 +5,19 @@ from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _fix_sqlite_url(url: str) -> str:
+    """Accept sqlite+aiosqlite:/./path (two slashes) as well as the canonical three-slash form."""
+    if url.startswith("sqlite+aiosqlite:/") and not url.startswith("sqlite+aiosqlite:///"):
+        return "sqlite+aiosqlite:///" + url[len("sqlite+aiosqlite:/") :].lstrip("/")
+    return url
+
+
 def normalize_database_url(url: str) -> tuple[str, bool]:
     """Convert Railway/Heroku postgres URLs to async SQLAlchemy + asyncpg."""
+    url = _fix_sqlite_url(url.strip())
+    if url.startswith("sqlite"):
+        return url, False
+
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://") :]
 
@@ -71,7 +82,7 @@ class Settings(BaseSettings):
     @field_validator("database_url", mode="before")
     @classmethod
     def resolve_database_url(cls, v: object) -> str:
-        return _pick_database_url(v)
+        return _fix_sqlite_url(_pick_database_url(v))
 
     @model_validator(mode="after")
     def validate_production_database(self) -> "Settings":

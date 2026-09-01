@@ -13,7 +13,7 @@ from app.config import settings
 from app.core.deps import require_roles
 from app.core.security import get_user_by_email, hash_password
 from app.database import get_db
-from app.models import Customer, PlatformShowcaseItem, Product, SaaSPlanTier, Sale, Tenant, TenantStatus, User, UserRole
+from app.models import Customer, PlatformPlan, PlatformShowcaseItem, Product, SaaSPlanTier, Sale, Tenant, TenantStatus, User, UserRole
 from app.schemas import RegisterRequest
 from app.seed_sample_data import DEMO_PASSWORD, SEED_MARKER, seed_login_aliases, seed_sample_data
 from app.services.account_service import create_tenant_with_owner
@@ -33,6 +33,10 @@ class TenantAdminOut(BaseModel):
     plan: str
     status: str
     tra_efd_serial: str
+    tin_number: str = ""
+    license_number: str = ""
+    subscription_expiry: str | None = None
+    mrr_tzs: float = 0
     created_at: datetime
     branches_count: int = 0
     products_count: int = 0
@@ -45,6 +49,8 @@ class TenantAdminOut(BaseModel):
 class TenantStatusUpdate(BaseModel):
     status: str | None = None
     plan: str | None = None
+    subscription_expiry: str | None = None
+    extend_months: int | None = None
 
 
 class AdminCreateTenantRequest(BaseModel):
@@ -77,6 +83,45 @@ class PlatformMetrics(BaseModel):
     total_revenue_month: float
     total_sales_month: int
     tenants_by_type: dict[str, int]
+
+
+async def _plan_mrr(db: AsyncSession, tier: SaaSPlanTier) -> float:
+    result = await db.execute(select(PlatformPlan).where(PlatformPlan.tier == tier))
+    plan = result.scalar_one_or_none()
+    return float(plan.price_monthly_tzs) if plan else 0.0
+
+
+def _tenant_admin_out(
+    t: Tenant,
+    *,
+    branches_count: int,
+    products_count: int,
+    customers_count: int,
+    monthly_revenue: float,
+    mrr_tzs: float,
+) -> TenantAdminOut:
+    return TenantAdminOut(
+        id=t.id,
+        name=t.name,
+        owner_name=t.owner_name,
+        owner_email=t.owner_email,
+        owner_phone=t.owner_phone,
+        business_type=t.business_type.value,
+        region=t.region,
+        district=t.district,
+        plan=t.plan.value,
+        status=t.status.value,
+        tra_efd_serial=t.tra_efd_serial or "",
+        tin_number=t.tin_number or "",
+        license_number=t.license_number or "",
+        subscription_expiry=t.subscription_expiry.isoformat()[:10] if t.subscription_expiry else None,
+        mrr_tzs=mrr_tzs,
+        created_at=t.created_at,
+        branches_count=branches_count,
+        products_count=products_count,
+        customers_count=customers_count,
+        monthly_revenue=monthly_revenue,
+    )
 
 
 @router.get("/metrics", response_model=PlatformMetrics)
@@ -144,23 +189,14 @@ async def list_tenants(
                 Sale.tenant_id == t.id, Sale.created_at >= month_start
             )
         ) or 0
-        out.append(TenantAdminOut(
-            id=t.id,
-            name=t.name,
-            owner_name=t.owner_name,
-            owner_email=t.owner_email,
-            owner_phone=t.owner_phone,
-            business_type=t.business_type.value,
-            region=t.region,
-            district=t.district,
-            plan=t.plan.value,
-            status=t.status.value,
-            tra_efd_serial=t.tra_efd_serial or "",
-            created_at=t.created_at,
+        mrr = await _plan_mrr(db, t.plan)
+        out.append(_tenant_admin_out(
+            t,
             branches_count=len(t.branches),
             products_count=int(pc),
             customers_count=int(cc),
             monthly_revenue=float(mr),
+            mrr_tzs=mrr,
         ))
     return out
 
@@ -296,13 +332,14 @@ async def get_tenant(
             Sale.tenant_id == t.id, Sale.created_at >= month_start
         )
     ) or 0
-    return TenantAdminOut(
-        id=t.id, name=t.name, owner_name=t.owner_name, owner_email=t.owner_email,
-        owner_phone=t.owner_phone, business_type=t.business_type.value,
-        region=t.region, district=t.district, plan=t.plan.value, status=t.status.value,
-        tra_efd_serial=t.tra_efd_serial or "", created_at=t.created_at,
-        branches_count=len(t.branches), products_count=int(pc), customers_count=int(cc),
+    mrr = await _plan_mrr(db, t.plan)
+    return _tenant_admin_out(
+        t,
+        branches_count=len(t.branches),
+        products_count=int(pc),
+        customers_count=int(cc),
         monthly_revenue=float(mr),
+        mrr_tzs=mrr,
     )
 
 
@@ -329,6 +366,18 @@ async def update_tenant_status(
             t.plan = SaaSPlanTier(body.plan)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"Invalid plan: {body.plan}") from e
+    if body.subscription_expiry:
+        try:
+            t.subscription_expiry = datetime.fromisoformat(body.subscription_expiry.replace("Z", "+00:00"))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail="Invalid subscription_expiry date") from e
+    if body.extend_months:
+        from datetime import timedelta
+        now = datetime.now(UTC)
+        base = t.subscription_expiry if t.subscription_expiry and t.subscription_expiry > now else now
+        t.subscription_expiry = base + timedelta(days=30 * body.extend_months)
+        if t.status != TenantStatus.active:
+            t.status = TenantStatus.active
     await db.flush()
     return await get_tenant(tenant_id, user, db)
 

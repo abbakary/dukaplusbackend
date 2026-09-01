@@ -5,11 +5,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from app.api.v1 import admin, ai, analytics, auth, business, extended, platform, tenant, workplace
+from app.api.v1 import admin, ai, analytics, auth, billing, business, documents, extended, platform, tenant, tenant_settings, workplace
 from app.config import settings
 from app.database import init_db
 from app.health import check_database, get_system_status
 from app.seed import seed_demo_data
+from app.seed_plans import seed_platform_plans
 from app.seed_showcase import seed_platform_showcase
 
 CONSOLE_HTML = (Path(__file__).resolve().parent / "static" / "console.html").read_text(encoding="utf-8")
@@ -19,6 +20,7 @@ CONSOLE_HTML = (Path(__file__).resolve().parent / "static" / "console.html").rea
 async def lifespan(app: FastAPI):
     await init_db()
     await seed_demo_data()
+    await seed_platform_plans()
     await seed_platform_showcase()
     yield
 
@@ -45,7 +47,10 @@ app.include_router(analytics.router, prefix="/api/v1")
 app.include_router(tenant.router, prefix="/api/v1")
 app.include_router(extended.router, prefix="/api/v1")
 app.include_router(platform.router, prefix="/api/v1")
+app.include_router(billing.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
+app.include_router(tenant_settings.router, prefix="/api/v1")
+app.include_router(documents.router, prefix="/api/v1")
 app.include_router(workplace.router, prefix="/api/v1")
 app.include_router(ai.router, prefix="/api/ai")
 app.include_router(ai.router, prefix="/api/v1/ai")

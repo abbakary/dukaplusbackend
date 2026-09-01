@@ -378,3 +378,69 @@ class PlatformShowcaseItem(Base):
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PlatformPlan(Base):
+    """Public SaaS plan catalog — managed by provider, shown on landing page."""
+    __tablename__ = "platform_plans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tier: Mapped[SaaSPlanTier] = mapped_column(Enum(SaaSPlanTier), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    name_sw: Mapped[str] = mapped_column(String(100))
+    tag_en: Mapped[str] = mapped_column(String(255), default="")
+    tag_sw: Mapped[str] = mapped_column(String(255), default="")
+    price_monthly_tzs: Mapped[float] = mapped_column(Float, default=0)
+    price_yearly_tzs: Mapped[float] = mapped_column(Float, default=0)
+    max_branches: Mapped[int] = mapped_column(Integer, default=1)
+    max_staff: Mapped[int] = mapped_column(Integer, default=3)
+    max_products: Mapped[int] = mapped_column(Integer, default=500)
+    features: Mapped[list] = mapped_column(JSON, default=list)
+    features_sw: Mapped[list] = mapped_column(JSON, default=list)
+    contact_us: Mapped[bool] = mapped_column(Boolean, default=False)
+    popular: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SubscriptionPayment(Base):
+    """Provider-recorded tenant subscription payments (M-Pesa, bank, etc.)."""
+    __tablename__ = "subscription_payments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), index=True)
+    tenant_name: Mapped[str] = mapped_column(String(255))
+    plan: Mapped[SaaSPlanTier] = mapped_column(Enum(SaaSPlanTier))
+    amount_tzs: Mapped[float] = mapped_column(Float, default=0)
+    payment_method: Mapped[str] = mapped_column(String(50), default="M-Pesa")
+    reference: Mapped[str] = mapped_column(String(100), default="")
+    billing_cycle: Mapped[str] = mapped_column(String(20), default="monthly")
+    status: Mapped[str] = mapped_column(String(20), default="completed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PlatformBroadcast(Base):
+    """Provider reminders / broadcasts to tenants (in-app, SMS, WhatsApp)."""
+    __tablename__ = "platform_broadcasts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    title: Mapped[str] = mapped_column(String(255))
+    message: Mapped[str] = mapped_column(Text)
+    target_audience: Mapped[str] = mapped_column(String(30), default="all")
+    target_region: Mapped[str] = mapped_column(String(255), default="")
+    channel: Mapped[str] = mapped_column(String(20), default="both")
+    sent_by: Mapped[str] = mapped_column(String(255), default="Provider Admin")
+    delivery_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="sent")
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TenantSettings(Base):
+    """Per-tenant document templates, branding, and business settings JSON."""
+    __tablename__ = "tenant_settings"
+
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), primary_key=True)
+    document_config: Mapped[dict] = mapped_column(JSON, default=dict)
+    business_settings: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

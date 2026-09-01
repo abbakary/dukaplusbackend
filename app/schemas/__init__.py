@@ -23,6 +23,7 @@ class RegisterRequest(BaseModel):
     license_number: str = ""
     region: str = "Dar es Salaam"
     district: str = ""
+    plan_tier: str = "free_starter"
 
 
 class TokenResponse(BaseModel):
@@ -45,6 +46,10 @@ class UserResponse(BaseModel):
     tenant_id: str | None = None
     business_name: str | None = None
     business_type: str | None = None
+    plan: str | None = None
+    subscription_expiry: str | None = None
+    tin_number: str | None = None
+    license_number: str | None = None
     staff_role: str | None = None
     staff_id: str | None = None
     branch: str | None = None
