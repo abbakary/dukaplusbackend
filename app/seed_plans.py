@@ -1,6 +1,6 @@
 """Seed platform SaaS plan catalog (idempotent + updates limits/prices)."""
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.database import AsyncSessionLocal
 from app.models import PlatformPlan, SaaSPlanTier
@@ -62,13 +62,6 @@ DEFAULT_PLANS = [
 
 async def seed_platform_plans() -> None:
     async with AsyncSessionLocal() as db:
-        try:
-            await db.execute(
-                text("UPDATE tenants SET plan = 'starter' WHERE plan = 'free_starter'")
-            )
-        except Exception:
-            pass
-
         for spec in DEFAULT_PLANS:
             existing = await db.execute(
                 select(PlatformPlan).where(PlatformPlan.tier == spec["tier"])
@@ -79,10 +72,5 @@ async def seed_platform_plans() -> None:
                     setattr(row, key, val)
             else:
                 db.add(PlatformPlan(**spec))
-
-        try:
-            await db.execute(text("DELETE FROM platform_plans WHERE tier = 'free_starter'"))
-        except Exception:
-            pass
 
         await db.commit()

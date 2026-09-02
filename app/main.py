@@ -10,6 +10,7 @@ from app.api.v1 import admin, ai, analytics, auth, billing, business, documents,
 from app.config import settings
 from app.database import init_db
 from app.health import check_database, get_system_status
+from app.plan_tier_migration import migrate_plan_tier_enum
 from app.seed import seed_demo_data
 from app.seed_plans import seed_platform_plans
 from app.seed_provider_data import seed_provider_data
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await migrate_plan_tier_enum()
     try:
         await seed_demo_data()
     except Exception:
