@@ -5,6 +5,12 @@ from datetime import UTC, datetime, timedelta
 from app.models import Tenant, TenantStatus
 
 GRACE_DAYS = 7
+DEMO_TENANT_EMAIL_MARKER = "sample.dukaplus.co.tz"
+
+
+def _is_demo_tenant(tenant: Tenant) -> bool:
+    email = (tenant.owner_email or "").lower()
+    return DEMO_TENANT_EMAIL_MARKER in email
 
 
 def _aware(dt: datetime | None) -> datetime | None:
@@ -31,6 +37,17 @@ async def sync_tenant_subscription_state(tenant: Tenant, db) -> None:
         return
 
     now = datetime.now(UTC)
+
+    # Demo/sample tenants stay active for trials and Vercel demos
+    if _is_demo_tenant(tenant):
+        exp = _aware(tenant.subscription_expiry)
+        if exp is None or exp < now + timedelta(days=7):
+            tenant.subscription_expiry = now + timedelta(days=30)
+        if tenant.status in (TenantStatus.suspended, TenantStatus.grace_period):
+            tenant.status = TenantStatus.active
+        await db.flush()
+        return
+
     past = days_past_expiry(tenant, now)
 
     if tenant.status == TenantStatus.suspended:

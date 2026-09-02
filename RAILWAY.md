@@ -17,7 +17,7 @@ Set these on your **backend API service** (not on the Postgres service):
 | `DATABASE_URL` | `${{ Postgres.DATABASE_PRIVATE_URL }}` |
 | `SECRET_KEY` | Long random string for JWT signing |
 | `ENVIRONMENT` | `production` |
-| `CORS_ORIGINS` | Your frontend URL(s), comma-separated |
+| `CORS_ORIGINS` | Your frontend URL(s), comma-separated — include `https://dukaplusapp.vercel.app` |
 | `SUPER_ADMIN_EMAIL` | Platform admin login email |
 | `SUPER_ADMIN_PASSWORD` | Strong password (not `admin123`) |
 | `SUPER_ADMIN_SYNC_PASSWORD` | `true` (default) — sync password from env on each deploy |
@@ -200,10 +200,14 @@ Point your React app to Railway and sign in with any account above.
 
 ## Frontend Connection
 
-Point your React app API base URL to the Railway backend:
+Point your React app API base URL to the Railway backend (Vercel env var):
 
 ```
-VITE_API_URL=https://your-app.up.railway.app/api/v1
+VITE_API_BASE_URL=https://dukaplusbackend-production.up.railway.app/api/v1
 ```
 
-Add the same URL to `CORS_ORIGINS` on the backend.
+Add your Vercel URL to `CORS_ORIGINS` on the backend (or rely on the built-in `*.vercel.app` regex):
+
+```
+CORS_ORIGINS=https://dukaplusapp.vercel.app,http://localhost:5173
+```
