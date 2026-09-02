@@ -90,7 +90,7 @@ def get_user_permissions(user: User) -> dict[str, bool]:
     if user.role == UserRole.super_admin:
         return {k: True for k in [
             "canSellPOS", "canGiveCredit", "canModifyInventory", "canViewProfitReports",
-            "canManageSuppliers", "canApproveDiscounts", "canVoidReceipts",
+            "canManageSuppliers", "canApproveDiscounts", "canOverridePrices", "canVoidReceipts",
             "canPerformDailyClosing", "canAccessSuperAdmin",
         ]}
     if user.role == UserRole.vendor_owner:

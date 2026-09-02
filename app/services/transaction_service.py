@@ -10,8 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Customer, Product, Sale, StockMovement, User
+from app.models import Customer, Product, Sale, StockMovement, TenantSettings, User
 from app.schemas import PaymentCreate, SaleCreate, SaleItemCreate
+from app.core.pricing_policy import validate_sale_pricing
 
 
 COMPLETED_STATUSES = frozenset({"completed", "pending_credit"})
@@ -105,6 +106,20 @@ async def create_sale_transaction(
     existing = await find_sale_by_client_id(db, tenant_id, body.client_id)
     if existing:
         return existing
+
+    settings_row = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
+    )
+    tenant_settings = settings_row.scalar_one_or_none()
+    business_settings = tenant_settings.business_settings if tenant_settings else None
+    await validate_sale_pricing(
+        db,
+        tenant_id=tenant_id,
+        user=user,
+        items=body.items,
+        sale_type=body.sale_type,
+        business_settings=business_settings,
+    )
 
     totals = compute_sale_totals(body.items, body.payments)
     receipt = f"RCP-{datetime.now(UTC).strftime('%Y%m%d')}-{secrets.token_hex(3).upper()}"

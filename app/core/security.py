@@ -86,31 +86,37 @@ DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
     "Owner": {
         "canSellPOS": True, "canGiveCredit": True, "canModifyInventory": True,
         "canViewProfitReports": True, "canManageSuppliers": True, "canApproveDiscounts": True,
-        "canVoidReceipts": True, "canPerformDailyClosing": True, "canAccessSuperAdmin": False,
+        "canOverridePrices": True, "canVoidReceipts": True, "canPerformDailyClosing": True,
+        "canAccessSuperAdmin": False,
     },
     "Manager": {
         "canSellPOS": True, "canGiveCredit": True, "canModifyInventory": True,
         "canViewProfitReports": True, "canManageSuppliers": True, "canApproveDiscounts": True,
-        "canVoidReceipts": True, "canPerformDailyClosing": True, "canAccessSuperAdmin": False,
+        "canOverridePrices": True, "canVoidReceipts": True, "canPerformDailyClosing": True,
+        "canAccessSuperAdmin": False,
     },
     "Pharmacist": {
         "canSellPOS": True, "canGiveCredit": True, "canModifyInventory": True,
         "canViewProfitReports": False, "canManageSuppliers": True, "canApproveDiscounts": True,
-        "canVoidReceipts": True, "canPerformDailyClosing": False, "canAccessSuperAdmin": False,
+        "canOverridePrices": True, "canVoidReceipts": True, "canPerformDailyClosing": False,
+        "canAccessSuperAdmin": False,
     },
     "Cashier": {
         "canSellPOS": True, "canGiveCredit": False, "canModifyInventory": False,
         "canViewProfitReports": False, "canManageSuppliers": False, "canApproveDiscounts": False,
-        "canVoidReceipts": False, "canPerformDailyClosing": True, "canAccessSuperAdmin": False,
+        "canOverridePrices": False, "canVoidReceipts": False, "canPerformDailyClosing": True,
+        "canAccessSuperAdmin": False,
     },
     "Storekeeper": {
         "canSellPOS": False, "canGiveCredit": False, "canModifyInventory": True,
         "canViewProfitReports": False, "canManageSuppliers": True, "canApproveDiscounts": False,
-        "canVoidReceipts": False, "canPerformDailyClosing": False, "canAccessSuperAdmin": False,
+        "canOverridePrices": False, "canVoidReceipts": False, "canPerformDailyClosing": False,
+        "canAccessSuperAdmin": False,
     },
     "Accountant": {
         "canSellPOS": False, "canGiveCredit": True, "canModifyInventory": True,
         "canViewProfitReports": True, "canManageSuppliers": True, "canApproveDiscounts": False,
-        "canVoidReceipts": False, "canPerformDailyClosing": True, "canAccessSuperAdmin": False,
+        "canOverridePrices": False, "canVoidReceipts": False, "canPerformDailyClosing": True,
+        "canAccessSuperAdmin": False,
     },
 }

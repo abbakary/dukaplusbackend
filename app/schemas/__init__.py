@@ -124,6 +124,8 @@ class SaleItemCreate(BaseModel):
     quantity: float
     unit_price: float
     total: float
+    discount_percent: float = 0
+    original_unit_price: float | None = None
 
 
 class PaymentCreate(BaseModel):
