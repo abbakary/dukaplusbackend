@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.deps import get_current_user, get_user_permissions
 from app.core.subscription import sync_tenant_subscription_state, subscription_status_message
 from app.core.security import (
@@ -80,7 +81,11 @@ async def login(body: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)]
     refresh_val = create_refresh_token_value()
     await store_refresh_token(db, user.id, refresh_val, body.device_info)
 
-    return TokenResponse(access_token=access, refresh_token=refresh_val)
+    return TokenResponse(
+        access_token=access,
+        refresh_token=refresh_val,
+        expires_in_days=settings.access_token_expire_days,
+    )
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -120,7 +125,11 @@ async def refresh_token(body: RefreshRequest, db: Annotated[AsyncSession, Depend
     refresh_val = create_refresh_token_value()
     await store_refresh_token(db, user.id, refresh_val, matched.device_info)
 
-    return TokenResponse(access_token=access, refresh_token=refresh_val)
+    return TokenResponse(
+        access_token=access,
+        refresh_token=refresh_val,
+        expires_in_days=settings.access_token_expire_days,
+    )
 
 
 @router.post("/logout")
