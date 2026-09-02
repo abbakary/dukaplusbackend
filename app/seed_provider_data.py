@@ -28,9 +28,9 @@ async def _plan_prices(db) -> dict[SaaSPlanTier, float]:
     result = await db.execute(select(PlatformPlan))
     rows = {p.tier: float(p.price_monthly_tzs) for p in result.scalars().all()}
     defaults = {
-        SaaSPlanTier.free_starter: 39000.0,
-        SaaSPlanTier.biashara_pro: 79000.0,
-        SaaSPlanTier.enterprise_chain: 250000.0,
+        SaaSPlanTier.starter: 49000.0,
+        SaaSPlanTier.biashara_pro: 99000.0,
+        SaaSPlanTier.enterprise_chain: 249000.0,
     }
     for tier, amount in defaults.items():
         rows.setdefault(tier, amount)
@@ -83,7 +83,7 @@ async def seed_provider_data() -> None:
             tenant.status = status
             tenant.subscription_expiry = expiry
 
-            if tenant.plan == SaaSPlanTier.free_starter:
+            if tenant.plan == SaaSPlanTier.starter:
                 payment_count = 1
             elif tenant.plan == SaaSPlanTier.biashara_pro:
                 payment_count = rng.randint(2, 3)

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.branch_scope import is_tenant_wide_access
 from app.core.deps import get_current_user, get_user_permissions
 from app.core.subscription import sync_tenant_subscription_state, subscription_status_message
 from app.core.security import (
@@ -43,6 +44,19 @@ def _build_user_response(user: User) -> UserResponse:
     elif tenant and tenant.status == TenantStatus.grace_period:
         status_val = "grace"
 
+    branch_id = None
+    branch_name = None
+    branch_type = None
+    branch_label = None
+    if staff and staff.branch_id:
+        branch_id = staff.branch_id
+        if staff.branch:
+            branch_name = staff.branch.name
+            branch_type = staff.branch.branch_type
+            branch_label = staff.branch.name
+        elif staff.branch_id:
+            branch_label = staff.branch_id
+
     return UserResponse(
         id=user.id,
         name=user.name,
@@ -58,7 +72,11 @@ def _build_user_response(user: User) -> UserResponse:
         license_number=tenant.license_number if tenant else None,
         staff_role=staff.role.value if staff else None,
         staff_id=staff.id if staff else None,
-        branch=None,
+        branch=branch_label,
+        branch_id=branch_id,
+        branch_name=branch_name,
+        branch_type=branch_type,
+        is_branch_scoped=bool(branch_id and not is_tenant_wide_access(user)),
         permissions=get_user_permissions(user),
         language=user.language,
         status=status_val,

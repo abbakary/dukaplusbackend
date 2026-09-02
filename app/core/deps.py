@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.core.security import decode_token
 from app.core.subscription import subscription_allows_api_access, subscription_status_message, sync_tenant_subscription_state
 from app.database import get_db
-from app.models import User, UserRole
+from app.models import StaffMember, User, UserRole
 
 security = HTTPBearer(auto_error=False)
 
@@ -28,7 +28,7 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
     result = await db.execute(
         select(User)
-        .options(selectinload(User.tenant), selectinload(User.staff))
+        .options(selectinload(User.tenant), selectinload(User.staff).selectinload(StaffMember.branch))
         .where(User.id == user_id, User.is_active == True)  # noqa: E712
     )
     user = result.scalar_one_or_none()

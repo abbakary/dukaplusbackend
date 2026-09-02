@@ -1,19 +1,19 @@
-"""Seed platform SaaS plan catalog (idempotent)."""
+"""Seed platform SaaS plan catalog (idempotent + updates limits/prices)."""
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.database import AsyncSessionLocal
 from app.models import PlatformPlan, SaaSPlanTier
 
 DEFAULT_PLANS = [
     {
-        "tier": SaaSPlanTier.free_starter,
-        "name": "Mwanzo",
-        "name_sw": "Mwanzo",
-        "tag_en": "Single shop getting started",
-        "tag_sw": "Duka moja linaloanza",
-        "price_monthly_tzs": 39000,
-        "price_yearly_tzs": 390000,
+        "tier": SaaSPlanTier.starter,
+        "name": "Plan 1 — Starter",
+        "name_sw": "Mpango 1 — Starter",
+        "tag_en": "Single branch — ideal for one shop",
+        "tag_sw": "Tawi moja — duka moja",
+        "price_monthly_tzs": 49000,
+        "price_yearly_tzs": 490000,
         "max_branches": 1,
         "max_staff": 3,
         "max_products": 500,
@@ -25,35 +25,35 @@ DEFAULT_PLANS = [
     },
     {
         "tier": SaaSPlanTier.biashara_pro,
-        "name": "Biashara Pro",
-        "name_sw": "Biashara Pro",
-        "tag_en": "Growing businesses",
-        "tag_sw": "Biashara inayokua",
-        "price_monthly_tzs": 79000,
-        "price_yearly_tzs": 790000,
-        "max_branches": 5,
-        "max_staff": 15,
+        "name": "Plan 2 — Biashara Pro",
+        "name_sw": "Mpango 2 — Biashara Pro",
+        "tag_en": "Growing business — up to 2 branches",
+        "tag_sw": "Biashara inayokua — matawi 2",
+        "price_monthly_tzs": 99000,
+        "price_yearly_tzs": 990000,
+        "max_branches": 2,
+        "max_staff": 10,
         "max_products": 5000,
-        "features": ["TRA EFD receipts", "RBAC staff", "AI insights", "Multi-branch"],
-        "features_sw": ["Risiti TRA EFD", "Mamlaka RBAC", "Ushauri wa AI", "Matawi mengi"],
+        "features": ["TRA EFD receipts", "RBAC staff", "AI insights", "2 branches"],
+        "features_sw": ["Risiti TRA EFD", "Mamlaka RBAC", "Ushauri wa AI", "Matawi 2"],
         "contact_us": False,
         "popular": True,
         "sort_order": 2,
     },
     {
         "tier": SaaSPlanTier.enterprise_chain,
-        "name": "Enterprise",
-        "name_sw": "Biashara Kubwa",
-        "tag_en": "Store chains & groups",
-        "tag_sw": "Minyororo ya maduka",
-        "price_monthly_tzs": 0,
-        "price_yearly_tzs": 0,
-        "max_branches": 99,
-        "max_staff": 99,
+        "name": "Plan 3 — Enterprise",
+        "name_sw": "Mpango 3 — Biashara Kubwa",
+        "tag_en": "Multi-branch chains — up to 3 branches",
+        "tag_sw": "Minyororo ya maduka — matawi 3",
+        "price_monthly_tzs": 249000,
+        "price_yearly_tzs": 2490000,
+        "max_branches": 3,
+        "max_staff": 15,
         "max_products": 99999,
-        "features": ["Unlimited scale", "API access", "Dedicated support", "Custom SLA"],
-        "features_sw": ["Ukubwa usio na kikomo", "API", "Msaada maalum", "SLA maalum"],
-        "contact_us": True,
+        "features": ["3 branches", "API access", "Dedicated support", "Consolidated reports"],
+        "features_sw": ["Matawi 3", "API", "Msaada maalum", "Ripoti za pamoja"],
+        "contact_us": False,
         "popular": False,
         "sort_order": 3,
     },
@@ -62,11 +62,27 @@ DEFAULT_PLANS = [
 
 async def seed_platform_plans() -> None:
     async with AsyncSessionLocal() as db:
+        try:
+            await db.execute(
+                text("UPDATE tenants SET plan = 'starter' WHERE plan = 'free_starter'")
+            )
+        except Exception:
+            pass
+
         for spec in DEFAULT_PLANS:
             existing = await db.execute(
                 select(PlatformPlan).where(PlatformPlan.tier == spec["tier"])
             )
-            if existing.scalar_one_or_none():
-                continue
-            db.add(PlatformPlan(**spec))
+            row = existing.scalar_one_or_none()
+            if row:
+                for key, val in spec.items():
+                    setattr(row, key, val)
+            else:
+                db.add(PlatformPlan(**spec))
+
+        try:
+            await db.execute(text("DELETE FROM platform_plans WHERE tier = 'free_starter'"))
+        except Exception:
+            pass
+
         await db.commit()

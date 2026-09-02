@@ -25,7 +25,7 @@ async def create_tenant_with_owner(
     body: RegisterRequest,
     *,
     tenant_status: TenantStatus = TenantStatus.active,
-    plan: SaaSPlanTier = SaaSPlanTier.free_starter,
+    plan: SaaSPlanTier = SaaSPlanTier.starter,
 ) -> tuple[Tenant, User]:
     existing = await get_user_by_email(db, body.email)
     if existing:

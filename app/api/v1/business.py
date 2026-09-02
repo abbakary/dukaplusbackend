@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 
+from app.core.branch_scope import apply_product_branch_filter, apply_sale_branch_filter, get_staff_branch_id
 from app.core.deps import get_current_user, get_user_permissions, require_permission, require_tenant, require_vendor_subscription
 
 from app.core.ttl_cache import cache_get, cache_set, invalidate_tenant_cache, tenant_cache_key
@@ -122,13 +123,19 @@ async def dashboard_stats(
 
 
 
-    sales_today = await db.execute(
+    staff_branch = get_staff_branch_id(user)
 
-        select(func.coalesce(func.sum(Sale.total), 0), func.count(Sale.id))
+    sales_today_q = select(func.coalesce(func.sum(Sale.total), 0), func.count(Sale.id)).where(
 
-        .where(Sale.tenant_id == tenant_id, Sale.created_at >= today)
+        Sale.tenant_id == tenant_id, Sale.created_at >= today
 
     )
+
+    if staff_branch:
+
+        sales_today_q = sales_today_q.where(Sale.branch_id == staff_branch)
+
+    sales_today = await db.execute(sales_today_q)
 
     today_revenue, today_sales_count = sales_today.one()
 
@@ -188,27 +195,27 @@ async def dashboard_stats(
 
     month_start = today.replace(day=1)
 
-    monthly = await db.scalar(
+    monthly_q = select(func.coalesce(func.sum(Sale.total), 0)).where(
 
-        select(func.coalesce(func.sum(Sale.total), 0)).where(
-
-            Sale.tenant_id == tenant_id, Sale.created_at >= month_start
-
-        )
+        Sale.tenant_id == tenant_id, Sale.created_at >= month_start
 
     )
 
+    if staff_branch:
+
+        monthly_q = monthly_q.where(Sale.branch_id == staff_branch)
+
+    monthly = await db.scalar(monthly_q)
 
 
-    top_rows = await db.execute(
 
-        select(Sale.items)
+    top_q = select(Sale.items).where(Sale.tenant_id == tenant_id, Sale.created_at >= month_start)
 
-        .where(Sale.tenant_id == tenant_id, Sale.created_at >= month_start)
+    if staff_branch:
 
-        .limit(200)
+        top_q = top_q.where(Sale.branch_id == staff_branch)
 
-    )
+    top_rows = await db.execute(top_q.limit(200))
 
     qty_by_product: dict[str, float] = {}
     rev_by_product: dict[str, float] = {}
@@ -314,11 +321,15 @@ async def list_products(
 
     limit: int = Query(100, ge=1, le=500),
 
+    branch_id: str | None = Query(None, description="Filter by branch (owner only)"),
+
 ):
 
     tenant_id = require_tenant(user)
 
     q = select(Product).where(Product.tenant_id == tenant_id, Product.is_active == True)  # noqa: E712
+
+    q = apply_product_branch_filter(q, user, branch_id)
 
     if search:
 
@@ -370,11 +381,13 @@ async def create_product(
 
     tenant = user.tenant
 
+    auto_branch = get_staff_branch_id(user)
+
     product = Product(
 
         tenant_id=tenant_id,
 
-        branch_id=body.branch_id,
+        branch_id=body.branch_id or auto_branch,
 
         name=body.name,
 
@@ -556,11 +569,15 @@ async def list_sales(
 
     status: str | None = Query(None, description="Filter by status, e.g. pending"),
 
+    branch_id: str | None = Query(None, description="Filter by branch (owner only)"),
+
 ):
 
     tenant_id = require_tenant(user)
 
     q = select(Sale).where(Sale.tenant_id == tenant_id)
+
+    q = apply_sale_branch_filter(q, user, branch_id)
 
     if status:
 

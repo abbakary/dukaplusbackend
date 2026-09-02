@@ -23,7 +23,7 @@ class RegisterRequest(BaseModel):
     license_number: str = ""
     region: str = "Dar es Salaam"
     district: str = ""
-    plan_tier: str = "free_starter"
+    plan_tier: str = "starter"
 
 
 class TokenResponse(BaseModel):
@@ -53,6 +53,10 @@ class UserResponse(BaseModel):
     staff_role: str | None = None
     staff_id: str | None = None
     branch: str | None = None
+    branch_id: str | None = None
+    branch_name: str | None = None
+    branch_type: str | None = None
+    is_branch_scoped: bool = False
     permissions: dict[str, bool] = {}
     language: str = "sw"
     status: str = "approved"

@@ -88,7 +88,7 @@ class AdminCreateTenantRequest(BaseModel):
     license_number: str = ""
     region: str = "Dar es Salaam"
     district: str = ""
-    plan: str = "free_starter"
+    plan: str = "starter"
     status: str = "active"
 
 

@@ -73,7 +73,7 @@ REGIONS = [
     ("Zanzibar", "Mjini Magharibi"),
 ]
 
-PLANS = [SaaSPlanTier.free_starter, SaaSPlanTier.biashara_pro, SaaSPlanTier.enterprise_chain]
+PLANS = [SaaSPlanTier.starter, SaaSPlanTier.biashara_pro, SaaSPlanTier.enterprise_chain]
 
 STAFF_ROLES_FOR_SEED = [
     StaffRole.manager,
@@ -87,24 +87,24 @@ STAFF_ROLES_FOR_SEED = [
 TENANT_SPECS: list[dict] = [
     {"slug": "kariakoo-pharmacy", "name": "Kariakoo Family Pharmacy", "owner": "Dr. Neema Mwangi", "type": BusinessType.pharmacy, "plan": SaaSPlanTier.biashara_pro},
     {"slug": "mlimani-mart", "name": "Mlimani City Supermarket", "owner": "Rajesh Patel", "type": BusinessType.supermarket, "plan": SaaSPlanTier.enterprise_chain},
-    {"slug": "mbezi-retail", "name": "Mbezi Beach General Store", "owner": "Fatuma Hassan", "type": BusinessType.retail, "plan": SaaSPlanTier.free_starter},
+    {"slug": "mbezi-retail", "name": "Mbezi Beach General Store", "owner": "Fatuma Hassan", "type": BusinessType.retail, "plan": SaaSPlanTier.starter},
     {"slug": "sinza-hardware", "name": "Sinza Hardware & Building", "owner": "John Mrema", "type": BusinessType.hardware, "plan": SaaSPlanTier.biashara_pro},
     {"slug": "samora-electronics", "name": "Samora Electronics Hub", "owner": "Amina Saidi", "type": BusinessType.electronics, "plan": SaaSPlanTier.biashara_pro},
     {"slug": "ubungo-autoparts", "name": "Ubungo Auto Spare Parts", "owner": "Charles Mkumbo", "type": BusinessType.auto_parts, "plan": SaaSPlanTier.biashara_pro},
-    {"slug": "kijitonyama-fashion", "name": "Kijitonyama Fashion House", "owner": "Grace Mushi", "type": BusinessType.fashion, "plan": SaaSPlanTier.free_starter},
+    {"slug": "kijitonyama-fashion", "name": "Kijitonyama Fashion House", "owner": "Grace Mushi", "type": BusinessType.fashion, "plan": SaaSPlanTier.starter},
     {"slug": "moshi-agrovet", "name": "Kilimanjaro Agrovet Centre", "owner": "Peter Lyimo", "type": BusinessType.agrovet, "plan": SaaSPlanTier.biashara_pro},
-    {"slug": "masaki-beauty", "name": "Masaki Beauty Lounge", "owner": "Zainab Omar", "type": BusinessType.beauty, "plan": SaaSPlanTier.free_starter},
-    {"slug": "mikocheni-salon", "name": "Mikocheni Salon & Spa", "owner": "Lucy Temba", "type": BusinessType.salon, "plan": SaaSPlanTier.free_starter},
+    {"slug": "masaki-beauty", "name": "Masaki Beauty Lounge", "owner": "Zainab Omar", "type": BusinessType.beauty, "plan": SaaSPlanTier.starter},
+    {"slug": "mikocheni-salon", "name": "Mikocheni Salon & Spa", "owner": "Lucy Temba", "type": BusinessType.salon, "plan": SaaSPlanTier.starter},
     {"slug": "slipway-restaurant", "name": "Slipway Restaurant & Cafe", "owner": "Michael Ngowi", "type": BusinessType.restaurant, "plan": SaaSPlanTier.biashara_pro},
-    {"slug": "posta-stationery", "name": "Posta Bookshop & Stationery", "owner": "Sarah Kimaro", "type": BusinessType.stationery, "plan": SaaSPlanTier.free_starter},
+    {"slug": "posta-stationery", "name": "Posta Bookshop & Stationery", "owner": "Sarah Kimaro", "type": BusinessType.stationery, "plan": SaaSPlanTier.starter},
     {"slug": "mwanza-furniture", "name": "Lake View Furniture", "owner": "David Mwangosi", "type": BusinessType.furniture, "plan": SaaSPlanTier.biashara_pro},
-    {"slug": "arusha-services", "name": "Arusha Tech Services", "owner": "Emmanuel Sanga", "type": BusinessType.service, "plan": SaaSPlanTier.free_starter},
+    {"slug": "arusha-services", "name": "Arusha Tech Services", "owner": "Emmanuel Sanga", "type": BusinessType.service, "plan": SaaSPlanTier.starter},
     {"slug": "tabata-mixed", "name": "Tabata Mixed Traders", "owner": "Halima Juma", "type": BusinessType.mixed, "plan": SaaSPlanTier.biashara_pro},
-    {"slug": "dodoma-pharmacy", "name": "Dodoma Central Pharmacy", "owner": "Rehema Msuya", "type": BusinessType.pharmacy, "plan": SaaSPlanTier.free_starter},
-    {"slug": "mbeya-retail", "name": "Mbeya Corner Shop", "owner": "Joseph Mwakasege", "type": BusinessType.retail, "plan": SaaSPlanTier.free_starter},
+    {"slug": "dodoma-pharmacy", "name": "Dodoma Central Pharmacy", "owner": "Rehema Msuya", "type": BusinessType.pharmacy, "plan": SaaSPlanTier.starter},
+    {"slug": "mbeya-retail", "name": "Mbeya Corner Shop", "owner": "Joseph Mwakasege", "type": BusinessType.retail, "plan": SaaSPlanTier.starter},
     {"slug": "tanga-hardware", "name": "Tanga Builders Supply", "owner": "Omari Hamisi", "type": BusinessType.hardware, "plan": SaaSPlanTier.biashara_pro},
     {"slug": "zanzibar-restaurant", "name": "Forodhani Seafood Grill", "owner": "Salma Ali", "type": BusinessType.restaurant, "plan": SaaSPlanTier.biashara_pro},
-    {"slug": "morogoro-agrovet", "name": "Morogoro Farmers Agrovet", "owner": "Godfrey Mrosso", "type": BusinessType.agrovet, "plan": SaaSPlanTier.free_starter},
+    {"slug": "morogoro-agrovet", "name": "Morogoro Farmers Agrovet", "owner": "Godfrey Mrosso", "type": BusinessType.agrovet, "plan": SaaSPlanTier.starter},
 ]
 
 # Primary demo tenant per business type → short login email {type}@sample.dukaplus.co.tz

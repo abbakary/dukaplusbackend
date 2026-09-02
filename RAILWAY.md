@@ -114,7 +114,7 @@ curl -X POST https://your-app.up.railway.app/api/v1/admin/tenants \
     "business_type": "retail",
     "region": "Dar es Salaam",
     "district": "Ilala",
-    "plan": "free_starter",
+    "plan": "starter",
     "status": "active"
   }'
 ```

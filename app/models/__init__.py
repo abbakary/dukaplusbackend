@@ -64,9 +64,15 @@ class TenantStatus(str, enum.Enum):
 
 
 class SaaSPlanTier(str, enum.Enum):
-    free_starter = "free_starter"
+    starter = "starter"
     biashara_pro = "biashara_pro"
     enterprise_chain = "enterprise_chain"
+
+    @classmethod
+    def _missing_(cls, value: object):
+        if value == "free_starter":
+            return cls.starter
+        return None
 
 
 class User(Base):
@@ -117,7 +123,7 @@ class Tenant(Base):
     district: Mapped[str] = mapped_column(String(100), default="")
     tin_number: Mapped[str] = mapped_column(String(50), default="")
     license_number: Mapped[str] = mapped_column(String(100), default="")
-    plan: Mapped[SaaSPlanTier] = mapped_column(Enum(SaaSPlanTier), default=SaaSPlanTier.free_starter)
+    plan: Mapped[SaaSPlanTier] = mapped_column(Enum(SaaSPlanTier), default=SaaSPlanTier.starter)
     status: Mapped[TenantStatus] = mapped_column(Enum(TenantStatus), default=TenantStatus.pending_kyc)
     tra_efd_serial: Mapped[str] = mapped_column(String(100), default="")
     subscription_expiry: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -167,6 +173,7 @@ class StaffMember(Base):
     joined_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     tenant: Mapped["Tenant"] = relationship(back_populates="staff_members")
+    branch: Mapped["Branch | None"] = relationship("Branch", foreign_keys=[branch_id])
     user: Mapped["User | None"] = relationship(back_populates="staff", uselist=False)
 
 

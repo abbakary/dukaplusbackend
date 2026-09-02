@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.branch_scope import is_tenant_wide_access
 from app.core.deps import get_current_user, get_user_permissions, require_permission, require_tenant, require_vendor_subscription
 from app.core.security import DEFAULT_PERMISSIONS, hash_password
 from app.database import get_db
@@ -22,6 +23,7 @@ from app.models import (
     User,
     UserRole,
 )
+from app.services.branch_service import BranchCreate, create_branch_with_admin, enrich_branch_row
 
 router = APIRouter(tags=["extended"], dependencies=[Depends(require_vendor_subscription)])
 
@@ -76,7 +78,17 @@ class BranchOut(BaseModel):
     district: str
     address: str
     phone: str
+    tra_efd_serial: str = ""
+    opening_hours: str = "08:00 - 20:00"
+    manager_staff_id: str | None = None
+    manager_name: str | None = None
+    staff_count: int = 0
+    created_at: str | None = None
     model_config = {"from_attributes": True}
+
+
+class BranchCreateResponse(BranchOut):
+    admin_email: str | None = None
 
 
 class StaffOut(BaseModel):
@@ -87,6 +99,8 @@ class StaffOut(BaseModel):
     role: str
     active: bool
     permissions: dict
+    branch_id: str | None = None
+    branch_name: str | None = None
     model_config = {"from_attributes": True}
 
 
@@ -287,8 +301,32 @@ async def delete_supplier(
 @router.get("/branches", response_model=list[BranchOut])
 async def list_branches(user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
     tid = require_tenant(user)
-    r = await db.execute(select(Branch).where(Branch.tenant_id == tid).order_by(Branch.name))
-    return r.scalars().all()
+    q = select(Branch).where(Branch.tenant_id == tid).order_by(Branch.name)
+    if not is_tenant_wide_access(user) and user.staff and user.staff.branch_id:
+        q = q.where(Branch.id == user.staff.branch_id)
+    r = await db.execute(q)
+    branches = r.scalars().all()
+    out = []
+    for b in branches:
+        out.append(await enrich_branch_row(db, b))
+    return out
+
+
+@router.post("/branches", response_model=BranchCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_branch(
+    body: BranchCreate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    if not is_tenant_wide_access(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner can create branches")
+    tenant = user.tenant
+    if not tenant:
+        raise HTTPException(status_code=400, detail="No tenant associated")
+    branch, admin_staff = await create_branch_with_admin(db, tenant, body)
+    payload = await enrich_branch_row(db, branch)
+    payload["admin_email"] = admin_staff.email
+    return payload
 
 
 # ── Staff ─────────────────────────────────────────────────────────────────────
@@ -296,13 +334,23 @@ async def list_branches(user: Annotated[User, Depends(get_current_user)], db: An
 @router.get("/staff", response_model=list[StaffOut])
 async def list_staff(user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
     tid = require_tenant(user)
-    r = await db.execute(select(StaffMember).where(StaffMember.tenant_id == tid, StaffMember.active == True))  # noqa: E712
+    q = select(StaffMember).where(StaffMember.tenant_id == tid, StaffMember.active == True)  # noqa: E712
+    if not is_tenant_wide_access(user) and user.staff and user.staff.branch_id:
+        q = q.where(StaffMember.branch_id == user.staff.branch_id)
+    r = await db.execute(q)
     rows = r.scalars().all()
+    branch_names: dict[str, str] = {}
+    branch_ids = {s.branch_id for s in rows if s.branch_id}
+    if branch_ids:
+        br = await db.execute(select(Branch).where(Branch.id.in_(branch_ids)))
+        branch_names = {b.id: b.name for b in br.scalars().all()}
     return [
         StaffOut(
             id=s.id, name=s.name, email=s.email, phone=s.phone,
             role=s.role.value if hasattr(s.role, "value") else str(s.role),
             active=s.active, permissions=s.permissions or {},
+            branch_id=s.branch_id,
+            branch_name=branch_names.get(s.branch_id) if s.branch_id else None,
         )
         for s in rows
     ]
