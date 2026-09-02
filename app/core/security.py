@@ -6,6 +6,7 @@ import bcrypt
 from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models import RefreshToken, User
@@ -78,7 +79,11 @@ async def revoke_refresh_token(db: AsyncSession, token: str) -> bool:
 
 async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
     normalized = email.strip().lower()
-    result = await db.execute(select(User).where(User.email == normalized))
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.tenant), selectinload(User.staff))
+        .where(User.email == normalized)
+    )
     return result.scalar_one_or_none()
 
 

@@ -73,7 +73,7 @@ async def login(body: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)]
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
 
-    if user.tenant:
+    if user.tenant_id and user.tenant:
         await sync_tenant_subscription_state(user.tenant, db)
 
     user.last_login = datetime.now(UTC)
@@ -97,6 +97,7 @@ async def register(body: RegisterRequest, db: Annotated[AsyncSession, Depends(ge
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(body: RefreshRequest, db: Annotated[AsyncSession, Depends(get_db)]):
     from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
     from app.models import RefreshToken
     from app.core.security import verify_token_hash
 
@@ -115,7 +116,11 @@ async def refresh_token(body: RefreshRequest, db: Annotated[AsyncSession, Depend
     if not matched:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
-    user_result = await db.execute(select(User).where(User.id == matched.user_id))
+    user_result = await db.execute(
+        select(User)
+        .options(selectinload(User.tenant), selectinload(User.staff))
+        .where(User.id == matched.user_id)
+    )
     user = user_result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
