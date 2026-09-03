@@ -12,6 +12,7 @@ from app.database import init_db
 from app.health import check_database, get_system_status
 from app.branch_backfill_migration import backfill_branch_ids
 from app.branch_customer_migration import migrate_customer_branch_column
+from app.branch_operational_migration import migrate_operational_branch_columns
 from app.plan_tier_migration import migrate_plan_tier_enum
 from app.seed import seed_demo_data
 from app.seed_plans import seed_platform_plans
@@ -27,6 +28,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     await migrate_plan_tier_enum()
     await migrate_customer_branch_column()
+    await migrate_operational_branch_columns()
     await backfill_branch_ids()
     try:
         await seed_demo_data()

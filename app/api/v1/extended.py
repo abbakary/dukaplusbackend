@@ -1,12 +1,12 @@
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.branch_scope import get_staff_branch_id, is_tenant_wide_access
+from app.core.branch_scope import get_staff_branch_id, is_tenant_wide_access, resolve_branch_filter
 from app.core.deps import get_current_user, get_user_permissions, require_permission, require_tenant, require_vendor_subscription
 from app.core.security import DEFAULT_PERMISSIONS, hash_password
 from app.database import get_db
@@ -23,7 +23,7 @@ from app.models import (
     User,
     UserRole,
 )
-from app.services.branch_service import BranchCreate, create_branch_with_admin, enrich_branch_row
+from app.services.branch_service import BranchCreate, create_branch_with_admin, enrich_branch_row, get_tenant_default_branch_id
 
 router = APIRouter(tags=["extended"], dependencies=[Depends(require_vendor_subscription)])
 
@@ -190,6 +190,7 @@ class CalendarEventCreate(BaseModel):
     description: str = ""
     assigned_to: str = ""
     metadata_json: dict = {}
+    branch_id: str | None = None
 
 
 class CalendarEventUpdate(BaseModel):
@@ -232,6 +233,7 @@ class PurchaseOrderOut(BaseModel):
     total_amount: float
     paid_amount: float
     notes: str | None
+    branch_id: str | None = None
     created_at: datetime
     model_config = {"from_attributes": True}
 
@@ -548,9 +550,17 @@ async def delete_expense(
 # ── Calendar ──────────────────────────────────────────────────────────────────
 
 @router.get("/calendar/events", response_model=list[CalendarEventOut])
-async def list_events(user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+async def list_events(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    branch_id: str | None = Query(None, description="Filter by branch (owner only)"),
+):
     tid = require_tenant(user)
-    r = await db.execute(select(CalendarEvent).where(CalendarEvent.tenant_id == tid).order_by(CalendarEvent.event_date))
+    q = select(CalendarEvent).where(CalendarEvent.tenant_id == tid)
+    effective = resolve_branch_filter(user, branch_id)
+    if effective:
+        q = q.where(CalendarEvent.branch_id == effective)
+    r = await db.execute(q.order_by(CalendarEvent.event_date))
     return r.scalars().all()
 
 
@@ -561,7 +571,14 @@ async def create_event(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tid = require_tenant(user)
-    ev = CalendarEvent(tenant_id=tid, **body.model_dump())
+    branch = get_staff_branch_id(user)
+    if not branch:
+        branch = (
+            body.branch_id if body.branch_id and body.branch_id not in ("all", "") else None
+        )
+    if not branch:
+        branch = await get_tenant_default_branch_id(db, tid)
+    ev = CalendarEvent(tenant_id=tid, branch_id=branch, **body.model_dump(exclude={"branch_id"}))
     db.add(ev)
     await db.flush()
     return ev
@@ -596,9 +613,17 @@ async def delete_event(
 # ── Purchase Orders ───────────────────────────────────────────────────────────
 
 @router.get("/purchase-orders", response_model=list[PurchaseOrderOut])
-async def list_purchase_orders(user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+async def list_purchase_orders(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    branch_id: str | None = Query(None, description="Filter by branch (owner only)"),
+):
     tid = require_tenant(user)
-    r = await db.execute(select(PurchaseOrder).where(PurchaseOrder.tenant_id == tid).order_by(PurchaseOrder.created_at.desc()))
+    q = select(PurchaseOrder).where(PurchaseOrder.tenant_id == tid)
+    effective = resolve_branch_filter(user, branch_id)
+    if effective:
+        q = q.where(PurchaseOrder.branch_id == effective)
+    r = await db.execute(q.order_by(PurchaseOrder.created_at.desc()))
     return r.scalars().all()
 
 
@@ -625,8 +650,19 @@ async def create_purchase_order(
             "expiry_date": it.expiry_date,
         })
     po_num = f"PO-{datetime.now(UTC).strftime('%Y%m%d')}-{len(items)}"
+    branch = get_staff_branch_id(user)
+    if not branch and body.items:
+        first_pid = body.items[0].product_id
+        if first_pid:
+            pr = await db.execute(select(Product).where(Product.id == first_pid, Product.tenant_id == tid))
+            prod = pr.scalar_one_or_none()
+            if prod and prod.branch_id:
+                branch = prod.branch_id
+    if not branch:
+        branch = await get_tenant_default_branch_id(db, tid)
     po = PurchaseOrder(
         tenant_id=tid,
+        branch_id=branch,
         po_number=po_num,
         supplier_id=sup.id,
         supplier_name=sup.name,
@@ -664,6 +700,7 @@ async def receive_purchase_order(
             sku = f"PO-{po.po_number}-{item.get('product_name', '')[:8]}"
             product = Product(
                 tenant_id=tid,
+                branch_id=po.branch_id or get_staff_branch_id(user),
                 name=item.get("product_name", "Imported Item"),
                 category="Procurement",
                 sku=sku,

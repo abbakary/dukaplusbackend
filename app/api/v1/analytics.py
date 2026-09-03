@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.branch_scope import resolve_branch_filter
 from app.core.deps import get_current_user, require_tenant, require_vendor_subscription
 from app.core.ttl_cache import cache_get, cache_set, tenant_cache_key
 from app.config import settings
@@ -10,6 +11,7 @@ from app.database import get_db
 from app.models import User
 from app.schemas import AnalyticsSnapshot
 from app.services.analytics_service import build_analytics_snapshot
+from app.services.geo_territory_service import build_geo_territory
 
 router = APIRouter(prefix="/analytics", tags=["analytics"], dependencies=[Depends(require_vendor_subscription)])
 
@@ -31,3 +33,15 @@ async def analytics_snapshot(
     payload = await build_analytics_snapshot(db, tenant_id, range)
     await cache_set(cache_key, payload, settings.analytics_cache_ttl_seconds)
     return AnalyticsSnapshot(**payload)
+
+
+@router.get("/geo-territory")
+async def geo_territory(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    branch_id: str | None = Query(None, description="Filter by branch (owner only)"),
+):
+    """Branch-scoped territory revenue from real sales and customer addresses."""
+    tenant_id = require_tenant(user)
+    effective = resolve_branch_filter(user, branch_id)
+    return await build_geo_territory(db, tenant_id, effective)
