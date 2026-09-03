@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -91,12 +91,28 @@ class AdminCreateTenantRequest(BaseModel):
     plan: str = "starter"
     status: str = "active"
 
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        cleaned = v.strip()
+        if len(cleaned) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return cleaned
+
 
 class AdminCreateSuperAdminRequest(BaseModel):
     name: str
     email: str
     phone: str = ""
     password: str
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        cleaned = v.strip()
+        if len(cleaned) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return cleaned
 
 
 class PlatformMetrics(BaseModel):

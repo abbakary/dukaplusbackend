@@ -22,13 +22,25 @@ class RegisterRequest(BaseModel):
     owner_name: str
     email: EmailStr
     phone: str
-    password: str = Field(min_length=6)
+    password: str
     business_type: str = "retail"
     tin_number: str = ""
     license_number: str = ""
     region: str = "Dar es Salaam"
     district: str = ""
     plan_tier: str = "starter"
+
+    @field_validator("password", mode="before")
+    @classmethod
+    def strip_password(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return v
 
     @field_validator("email")
     @classmethod

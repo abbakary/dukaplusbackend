@@ -324,12 +324,17 @@
 
     document.getElementById('create-tenant-btn').addEventListener('click', async () => {
       const msg = document.getElementById('tenant-msg');
+      const password = document.getElementById('t-password').value.trim();
+      if (password.length < 6) {
+        showMsg(msg, 'Password must be at least 6 characters.', false);
+        return;
+      }
       const payload = {
         business_name: document.getElementById('t-business').value.trim(),
         owner_name: document.getElementById('t-owner').value.trim(),
         email: document.getElementById('t-email').value.trim(),
         phone: document.getElementById('t-phone').value.trim(),
-        password: document.getElementById('t-password').value,
+        password,
         business_type: document.getElementById('t-type').value,
         region: document.getElementById('t-region').value.trim(),
         district: document.getElementById('t-district').value.trim(),
@@ -352,11 +357,16 @@
 
     document.getElementById('create-sa-btn').addEventListener('click', async () => {
       const msg = document.getElementById('sa-msg');
+      const password = document.getElementById('sa-password').value.trim();
+      if (password.length < 6) {
+        showMsg(msg, 'Password must be at least 6 characters.', false);
+        return;
+      }
       const payload = {
         name: document.getElementById('sa-name').value.trim(),
         email: document.getElementById('sa-email').value.trim(),
         phone: document.getElementById('sa-phone').value.trim(),
-        password: document.getElementById('sa-password').value,
+        password,
       };
       try {
         const res = await fetch('/api/v1/admin/users/super-admin', {
