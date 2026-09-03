@@ -20,7 +20,8 @@ from app.models import (
     User,
     UserRole,
 )
-from app.seed_plans import DEFAULT_PLANS, seed_platform_plans
+from app.plan_catalog import DEFAULT_PLANS, SHARED_FEATURES, SHARED_FEATURES_SW
+from app.seed_plans import seed_platform_plans
 
 router = APIRouter(tags=["billing"])
 
@@ -47,6 +48,11 @@ class PlanOut(BaseModel):
     active_subscribers_count: int = 0
 
     model_config = {"from_attributes": True}
+
+
+class PlanFeaturesSync(BaseModel):
+    features: list[str]
+    features_sw: list[str]
 
 
 class PlanUpdate(BaseModel):
@@ -207,6 +213,13 @@ async def admin_list_plans(
     return out
 
 
+async def _sync_shared_features(db: AsyncSession, features: list[str], features_sw: list[str]) -> None:
+    result = await db.execute(select(PlatformPlan))
+    for row in result.scalars().all():
+        row.features = features
+        row.features_sw = features_sw
+
+
 @router.patch("/admin/plans/{plan_id}", response_model=PlanOut)
 async def admin_update_plan(
     plan_id: str,
@@ -225,8 +238,28 @@ async def admin_update_plan(
             row.popular = False
     for k, v in updates.items():
         setattr(plan, k, v)
+    if "features" in updates or "features_sw" in updates:
+        await _sync_shared_features(
+            db,
+            updates.get("features") or plan.features or list(SHARED_FEATURES),
+            updates.get("features_sw") or plan.features_sw or list(SHARED_FEATURES_SW),
+        )
     await db.flush()
-    return _plan_out(plan)
+    plans = await _load_plans(db)
+    updated = next((p for p in plans if p.id == plan_id), plan)
+    return _plan_out(updated)
+
+
+@router.put("/admin/plans/shared-features", response_model=list[PlanOut])
+async def admin_sync_shared_features(
+    body: PlanFeaturesSync,
+    user: Annotated[User, Depends(require_roles(UserRole.super_admin))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    await _sync_shared_features(db, body.features, body.features_sw)
+    await db.flush()
+    plans = await _load_plans(db)
+    return [_plan_out(p) for p in plans]
 
 
 @router.post("/admin/plans/reset", response_model=list[PlanOut])
