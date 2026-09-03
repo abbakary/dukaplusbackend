@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Customer, Product, Sale
+from app.services.branch_service import get_tenant_default_branch_id
 
 # Tanzania location hints → lat, lng, region (street-level approximations)
 _GEO_HINTS: list[tuple[str, float, float, str]] = [
@@ -70,7 +71,11 @@ async def build_geo_territory(
 
     sq = select(Sale).where(Sale.tenant_id == tenant_id).order_by(Sale.created_at.desc()).limit(5000)
     if branch_id:
-        sq = sq.where(Sale.branch_id == branch_id)
+        hq_id = await get_tenant_default_branch_id(db, tenant_id)
+        if hq_id and branch_id == hq_id:
+            sq = sq.where(or_(Sale.branch_id == branch_id, Sale.branch_id.is_(None)))
+        else:
+            sq = sq.where(Sale.branch_id == branch_id)
     sales = (await db.execute(sq)).scalars().all()
 
     loc_buckets: dict[str, dict[str, Any]] = defaultdict(

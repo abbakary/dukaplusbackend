@@ -17,55 +17,86 @@ def _is_postgres() -> bool:
 
 
 async def backfill_branch_ids() -> None:
-    if not _is_postgres():
-        return
-
-    statements = (
-        """
-        UPDATE products p
-        SET branch_id = b.id
-        FROM branches b
-        WHERE p.branch_id IS NULL
-          AND p.tenant_id = b.tenant_id
-          AND b.branch_type = 'main_hq'
-        """,
-        """
-        UPDATE products p
-        SET branch_id = b.id
-        FROM (
-            SELECT DISTINCT ON (tenant_id) id, tenant_id
-            FROM branches
-            ORDER BY tenant_id, created_at
-        ) b
-        WHERE p.branch_id IS NULL AND p.tenant_id = b.tenant_id
-        """,
-        """
-        UPDATE sales s
-        SET branch_id = p.branch_id
-        FROM products p
-        WHERE s.branch_id IS NULL
-          AND s.items IS NOT NULL
-          AND json_array_length(s.items::json) > 0
-          AND (s.items::json->0->>'product_id') = p.id
-          AND p.branch_id IS NOT NULL
-        """,
-        """
-        UPDATE sales s
-        SET branch_id = b.id
-        FROM branches b
-        WHERE s.branch_id IS NULL
-          AND s.tenant_id = b.tenant_id
-          AND b.branch_type = 'main_hq'
-        """,
-        """
-        UPDATE customers c
-        SET branch_id = b.id
-        FROM branches b
-        WHERE c.branch_id IS NULL
-          AND c.tenant_id = b.tenant_id
-          AND b.branch_type = 'main_hq'
-        """,
-    )
+    if _is_postgres():
+        statements = (
+            """
+            UPDATE products p
+            SET branch_id = b.id
+            FROM branches b
+            WHERE p.branch_id IS NULL
+              AND p.tenant_id = b.tenant_id
+              AND b.branch_type = 'main_hq'
+            """,
+            """
+            UPDATE products p
+            SET branch_id = b.id
+            FROM (
+                SELECT DISTINCT ON (tenant_id) id, tenant_id
+                FROM branches
+                ORDER BY tenant_id, created_at
+            ) b
+            WHERE p.branch_id IS NULL AND p.tenant_id = b.tenant_id
+            """,
+            """
+            UPDATE sales s
+            SET branch_id = p.branch_id
+            FROM products p
+            WHERE s.branch_id IS NULL
+              AND s.items IS NOT NULL
+              AND json_array_length(s.items::json) > 0
+              AND (s.items::json->0->>'product_id') = p.id
+              AND p.branch_id IS NOT NULL
+            """,
+            """
+            UPDATE sales s
+            SET branch_id = b.id
+            FROM branches b
+            WHERE s.branch_id IS NULL
+              AND s.tenant_id = b.tenant_id
+              AND b.branch_type = 'main_hq'
+            """,
+            """
+            UPDATE customers c
+            SET branch_id = b.id
+            FROM branches b
+            WHERE c.branch_id IS NULL
+              AND c.tenant_id = b.tenant_id
+              AND b.branch_type = 'main_hq'
+            """,
+        )
+    else:
+        statements = (
+            """
+            UPDATE products
+            SET branch_id = (
+                SELECT id FROM branches
+                WHERE branches.tenant_id = products.tenant_id
+                  AND branches.branch_type = 'main_hq'
+                LIMIT 1
+            )
+            WHERE branch_id IS NULL
+            """,
+            """
+            UPDATE sales
+            SET branch_id = (
+                SELECT id FROM branches
+                WHERE branches.tenant_id = sales.tenant_id
+                  AND branches.branch_type = 'main_hq'
+                LIMIT 1
+            )
+            WHERE branch_id IS NULL
+            """,
+            """
+            UPDATE customers
+            SET branch_id = (
+                SELECT id FROM branches
+                WHERE branches.tenant_id = customers.tenant_id
+                  AND branches.branch_type = 'main_hq'
+                LIMIT 1
+            )
+            WHERE branch_id IS NULL
+            """,
+        )
 
     async with engine.begin() as conn:
         for stmt in statements:

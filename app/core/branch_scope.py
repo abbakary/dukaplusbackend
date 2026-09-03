@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, status
-from sqlalchemy import Select, select
+from sqlalchemy import Select, or_, select
 
 from app.models import Customer, Product, Sale, StaffRole, User, UserRole
 
@@ -41,8 +41,15 @@ def resolve_branch_filter(user: User, branch_id: str | None = None) -> str | Non
     return None
 
 
-def resolve_sale_branch_id(user: User, requested_branch_id: str | None = None) -> str | None:
+async def resolve_sale_branch_id(
+    db,
+    user: User,
+    tenant_id: str,
+    requested_branch_id: str | None = None,
+) -> str | None:
     """Branch to attach on new sales — branch staff always use their branch."""
+    from app.services.branch_service import get_tenant_default_branch_id
+
     staff_branch = get_staff_branch_id(user)
     if staff_branch:
         if requested_branch_id and requested_branch_id not in ("all", "") and requested_branch_id != staff_branch:
@@ -53,7 +60,7 @@ def resolve_sale_branch_id(user: User, requested_branch_id: str | None = None) -
         return staff_branch
     if requested_branch_id and requested_branch_id not in ("all", ""):
         return requested_branch_id
-    return None
+    return await get_tenant_default_branch_id(db, tenant_id)
 
 
 def assert_branch_record_access(user: User, record_branch_id: str | None, *, label: str = "record") -> None:
@@ -68,24 +75,54 @@ def assert_branch_record_access(user: User, record_branch_id: str | None, *, lab
         )
 
 
-def apply_product_branch_filter(q: Select, user: User, branch_id: str | None = None) -> Select:
+def branch_id_filter(column, effective: str | None, hq_branch_id: str | None = None):
+    """Match branch rows; legacy NULL rows belong to HQ when filtering HQ."""
+    if not effective:
+        return None
+    if hq_branch_id and effective == hq_branch_id:
+        return or_(column == effective, column.is_(None))
+    return column == effective
+
+
+def apply_product_branch_filter(
+    q: Select,
+    user: User,
+    branch_id: str | None = None,
+    *,
+    hq_branch_id: str | None = None,
+) -> Select:
     effective = resolve_branch_filter(user, branch_id)
-    if effective:
-        return q.where(Product.branch_id == effective)
+    clause = branch_id_filter(Product.branch_id, effective, hq_branch_id)
+    if clause is not None:
+        return q.where(clause)
     return q
 
 
-def apply_sale_branch_filter(q: Select, user: User, branch_id: str | None = None) -> Select:
+def apply_sale_branch_filter(
+    q: Select,
+    user: User,
+    branch_id: str | None = None,
+    *,
+    hq_branch_id: str | None = None,
+) -> Select:
     effective = resolve_branch_filter(user, branch_id)
-    if effective:
-        return q.where(Sale.branch_id == effective)
+    clause = branch_id_filter(Sale.branch_id, effective, hq_branch_id)
+    if clause is not None:
+        return q.where(clause)
     return q
 
 
-def apply_customer_branch_filter(q: Select, user: User, branch_id: str | None = None) -> Select:
+def apply_customer_branch_filter(
+    q: Select,
+    user: User,
+    branch_id: str | None = None,
+    *,
+    hq_branch_id: str | None = None,
+) -> Select:
     effective = resolve_branch_filter(user, branch_id)
-    if effective:
-        return q.where(Customer.branch_id == effective)
+    clause = branch_id_filter(Customer.branch_id, effective, hq_branch_id)
+    if clause is not None:
+        return q.where(clause)
     return q
 
 

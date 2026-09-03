@@ -21,12 +21,12 @@ from app.core.branch_scope import (
     apply_product_branch_filter,
     apply_sale_branch_filter,
     assert_branch_record_access,
+    branch_id_filter,
     get_staff_branch_id,
     load_customer_for_user,
     load_product_for_user,
     load_sale_for_user,
     resolve_branch_filter,
-    resolve_sale_branch_id,
 )
 from app.core.deps import get_current_user, get_user_permissions, require_permission, require_tenant, require_vendor_subscription
 
@@ -137,7 +137,7 @@ async def dashboard_stats(
 
     today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
-
+    hq_branch_id = await get_tenant_default_branch_id(db, tenant_id) if effective_branch else None
 
     staff_branch = effective_branch
 
@@ -147,9 +147,11 @@ async def dashboard_stats(
 
     )
 
-    if staff_branch:
+    sales_branch_clause = branch_id_filter(Sale.branch_id, staff_branch, hq_branch_id)
 
-        sales_today_q = sales_today_q.where(Sale.branch_id == staff_branch)
+    if sales_branch_clause is not None:
+
+        sales_today_q = sales_today_q.where(sales_branch_clause)
 
     sales_today = await db.execute(sales_today_q)
 
@@ -159,9 +161,11 @@ async def dashboard_stats(
 
     product_count_q = select(func.count(Product.id)).where(Product.tenant_id == tenant_id, Product.is_active == True)  # noqa: E712
 
-    if staff_branch:
+    product_branch_clause = branch_id_filter(Product.branch_id, staff_branch, hq_branch_id)
 
-        product_count_q = product_count_q.where(Product.branch_id == staff_branch)
+    if product_branch_clause is not None:
+
+        product_count_q = product_count_q.where(product_branch_clause)
 
     product_count = await db.scalar(product_count_q)
 
@@ -175,9 +179,9 @@ async def dashboard_stats(
 
     )
 
-    if staff_branch:
+    if product_branch_clause is not None:
 
-        low_stock_q = low_stock_q.where(Product.branch_id == staff_branch)
+        low_stock_q = low_stock_q.where(product_branch_clause)
 
     low_stock = await db.scalar(low_stock_q)
 
@@ -191,25 +195,27 @@ async def dashboard_stats(
 
     )
 
-    if staff_branch:
+    if product_branch_clause is not None:
 
-        expiring_q = expiring_q.where(Product.branch_id == staff_branch)
+        expiring_q = expiring_q.where(product_branch_clause)
 
     expiring = await db.scalar(expiring_q)
 
     customer_count_q = select(func.count(Customer.id)).where(Customer.tenant_id == tenant_id)
 
-    if staff_branch:
+    customer_branch_clause = branch_id_filter(Customer.branch_id, staff_branch, hq_branch_id)
 
-        customer_count_q = customer_count_q.where(Customer.branch_id == staff_branch)
+    if customer_branch_clause is not None:
+
+        customer_count_q = customer_count_q.where(customer_branch_clause)
 
     customer_count = await db.scalar(customer_count_q)
 
     receivables_q = select(func.coalesce(func.sum(Customer.balance), 0)).where(Customer.tenant_id == tenant_id)
 
-    if staff_branch:
+    if customer_branch_clause is not None:
 
-        receivables_q = receivables_q.where(Customer.branch_id == staff_branch)
+        receivables_q = receivables_q.where(customer_branch_clause)
 
     receivables = await db.scalar(receivables_q)
 
@@ -227,9 +233,9 @@ async def dashboard_stats(
 
     )
 
-    if staff_branch:
+    if sales_branch_clause is not None:
 
-        monthly_q = monthly_q.where(Sale.branch_id == staff_branch)
+        monthly_q = monthly_q.where(sales_branch_clause)
 
     monthly = await db.scalar(monthly_q)
 
@@ -237,9 +243,9 @@ async def dashboard_stats(
 
     top_q = select(Sale.items).where(Sale.tenant_id == tenant_id, Sale.created_at >= month_start)
 
-    if staff_branch:
+    if sales_branch_clause is not None:
 
-        top_q = top_q.where(Sale.branch_id == staff_branch)
+        top_q = top_q.where(sales_branch_clause)
 
     top_rows = await db.execute(top_q.limit(200))
 
@@ -353,9 +359,11 @@ async def list_products(
 
     tenant_id = require_tenant(user)
 
+    hq_branch_id = await get_tenant_default_branch_id(db, tenant_id)
+
     q = select(Product).where(Product.tenant_id == tenant_id, Product.is_active == True)  # noqa: E712
 
-    q = apply_product_branch_filter(q, user, branch_id)
+    q = apply_product_branch_filter(q, user, branch_id, hq_branch_id=hq_branch_id)
 
     if search:
 
@@ -595,9 +603,11 @@ async def list_sales(
 
     tenant_id = require_tenant(user)
 
+    hq_branch_id = await get_tenant_default_branch_id(db, tenant_id)
+
     q = select(Sale).where(Sale.tenant_id == tenant_id)
 
-    q = apply_sale_branch_filter(q, user, branch_id)
+    q = apply_sale_branch_filter(q, user, branch_id, hq_branch_id=hq_branch_id)
 
     if status:
 
@@ -645,9 +655,11 @@ async def list_customers(
 
     tenant_id = require_tenant(user)
 
+    hq_branch_id = await get_tenant_default_branch_id(db, tenant_id)
+
     q = select(Customer).where(Customer.tenant_id == tenant_id)
 
-    q = apply_customer_branch_filter(q, user, branch_id)
+    q = apply_customer_branch_filter(q, user, branch_id, hq_branch_id=hq_branch_id)
 
     if search:
 

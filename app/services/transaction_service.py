@@ -126,7 +126,7 @@ async def create_sale_transaction(
     )
 
     totals = compute_sale_totals(body.items, body.payments)
-    sale_branch_id = resolve_sale_branch_id(user, body.branch_id)
+    sale_branch_id = await resolve_sale_branch_id(db, user, tenant_id, body.branch_id)
     receipt = f"RCP-{datetime.now(UTC).strftime('%Y%m%d')}-{secrets.token_hex(3).upper()}"
     status = resolve_sale_status(
         finalize=should_finalize,
