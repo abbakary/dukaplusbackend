@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Customer, Product, Sale, StockMovement, TenantSettings, User
 from app.schemas import PaymentCreate, SaleCreate, SaleItemCreate
+from app.core.branch_scope import assert_branch_record_access, get_staff_branch_id, resolve_sale_branch_id
 from app.core.pricing_policy import validate_sale_pricing
 
 
@@ -63,6 +64,7 @@ async def apply_stock_for_sale(
     receipt: str,
     operator_name: str,
     validate_stock: bool = True,
+    branch_id: str | None = None,
 ) -> None:
     for item in items:
         result = await db.execute(
@@ -71,6 +73,8 @@ async def apply_stock_for_sale(
         product = result.scalar_one_or_none()
         if not product:
             raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
+        if branch_id and product.branch_id != branch_id:
+            raise HTTPException(status_code=403, detail=f"Product {product.name} belongs to another branch")
         if validate_stock and product.stock < item.quantity:
             raise HTTPException(status_code=400, detail=f"Insufficient stock for {product.name}")
         prev = product.stock
@@ -122,6 +126,7 @@ async def create_sale_transaction(
     )
 
     totals = compute_sale_totals(body.items, body.payments)
+    sale_branch_id = resolve_sale_branch_id(user, body.branch_id)
     receipt = f"RCP-{datetime.now(UTC).strftime('%Y%m%d')}-{secrets.token_hex(3).upper()}"
     status = resolve_sale_status(
         finalize=should_finalize,
@@ -137,6 +142,7 @@ async def create_sale_transaction(
             receipt=receipt,
             operator_name=user.name,
             validate_stock=True,
+            branch_id=sale_branch_id or get_staff_branch_id(user),
         )
 
         if body.customer_id and totals["balance_remaining"] > 0:
@@ -145,11 +151,12 @@ async def create_sale_transaction(
             )
             customer = cust_result.scalar_one_or_none()
             if customer:
+                assert_branch_record_access(user, customer.branch_id, label="customer")
                 customer.balance += totals["balance_remaining"]
 
     sale = Sale(
         tenant_id=tenant_id,
-        branch_id=body.branch_id,
+        branch_id=sale_branch_id,
         receipt_number=receipt,
         customer_id=body.customer_id,
         customer_name=body.customer_name,

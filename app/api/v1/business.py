@@ -16,7 +16,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 
-from app.core.branch_scope import apply_product_branch_filter, apply_sale_branch_filter, get_staff_branch_id
+from app.core.branch_scope import (
+    apply_customer_branch_filter,
+    apply_product_branch_filter,
+    apply_sale_branch_filter,
+    assert_branch_record_access,
+    get_staff_branch_id,
+    load_customer_for_user,
+    load_product_for_user,
+    load_sale_for_user,
+    resolve_branch_filter,
+    resolve_sale_branch_id,
+)
 from app.core.deps import get_current_user, get_user_permissions, require_permission, require_tenant, require_vendor_subscription
 
 from app.core.ttl_cache import cache_get, cache_set, invalidate_tenant_cache, tenant_cache_key
@@ -105,11 +116,15 @@ async def dashboard_stats(
 
     db: Annotated[AsyncSession, Depends(get_db)],
 
+    branch_id: str | None = Query(None, description="Filter by branch (owner only)"),
+
 ):
 
     tenant_id = require_tenant(user)
 
-    cache_key = tenant_cache_key(tenant_id, "dashboard")
+    effective_branch = resolve_branch_filter(user, branch_id)
+
+    cache_key = tenant_cache_key(tenant_id, "dashboard", effective_branch or "all")
 
     cached = await cache_get(cache_key)
 
@@ -123,7 +138,7 @@ async def dashboard_stats(
 
 
 
-    staff_branch = get_staff_branch_id(user)
+    staff_branch = effective_branch
 
     sales_today_q = select(func.coalesce(func.sum(Sale.total), 0), func.count(Sale.id)).where(
 
@@ -141,53 +156,63 @@ async def dashboard_stats(
 
 
 
-    product_count = await db.scalar(
+    product_count_q = select(func.count(Product.id)).where(Product.tenant_id == tenant_id, Product.is_active == True)  # noqa: E712
 
-        select(func.count(Product.id)).where(Product.tenant_id == tenant_id, Product.is_active == True)  # noqa: E712
+    if staff_branch:
 
-    )
+        product_count_q = product_count_q.where(Product.branch_id == staff_branch)
 
-    low_stock = await db.scalar(
+    product_count = await db.scalar(product_count_q)
 
-        select(func.count(Product.id)).where(
+    low_stock_q = select(func.count(Product.id)).where(
 
-            Product.tenant_id == tenant_id,
+        Product.tenant_id == tenant_id,
 
-            Product.is_active == True,  # noqa: E712
+        Product.is_active == True,  # noqa: E712
 
-            Product.stock <= Product.reorder_point,
-
-        )
+        Product.stock <= Product.reorder_point,
 
     )
 
-    expiring = await db.scalar(
+    if staff_branch:
 
-        select(func.count(Product.id)).where(
+        low_stock_q = low_stock_q.where(Product.branch_id == staff_branch)
 
-            Product.tenant_id == tenant_id,
+    low_stock = await db.scalar(low_stock_q)
 
-            Product.expiry_date.isnot(None),
+    expiring_q = select(func.count(Product.id)).where(
 
-            Product.expiry_date <= datetime.now(UTC) + timedelta(days=30),
+        Product.tenant_id == tenant_id,
 
-        )
+        Product.expiry_date.isnot(None),
 
-    )
-
-    customer_count = await db.scalar(
-
-        select(func.count(Customer.id)).where(Customer.tenant_id == tenant_id)
+        Product.expiry_date <= datetime.now(UTC) + timedelta(days=30),
 
     )
 
-    receivables = await db.scalar(
+    if staff_branch:
 
-        select(func.coalesce(func.sum(Customer.balance), 0)).where(Customer.tenant_id == tenant_id)
+        expiring_q = expiring_q.where(Product.branch_id == staff_branch)
 
-    )
+    expiring = await db.scalar(expiring_q)
 
-    payables = await db.scalar(
+    customer_count_q = select(func.count(Customer.id)).where(Customer.tenant_id == tenant_id)
+
+    if staff_branch:
+
+        customer_count_q = customer_count_q.where(Customer.branch_id == staff_branch)
+
+    customer_count = await db.scalar(customer_count_q)
+
+    receivables_q = select(func.coalesce(func.sum(Customer.balance), 0)).where(Customer.tenant_id == tenant_id)
+
+    if staff_branch:
+
+        receivables_q = receivables_q.where(Customer.branch_id == staff_branch)
+
+    receivables = await db.scalar(receivables_q)
+
+    payables = 0.0 if staff_branch else await db.scalar(
 
         select(func.coalesce(func.sum(Supplier.outstanding_payable), 0)).where(Supplier.tenant_id == tenant_id)
 
@@ -459,6 +484,8 @@ async def update_product(
 
         raise HTTPException(status_code=404, detail="Product not found")
 
+    assert_branch_record_access(user, product.branch_id, label="product")
+
     for field, value in body.model_dump(exclude_unset=True).items():
 
         setattr(product, field, value)
@@ -517,17 +544,7 @@ async def finalize_sale(
 
     tenant_id = require_tenant(user)
 
-    result = await db.execute(
-
-        select(Sale).where(Sale.id == sale_id, Sale.tenant_id == tenant_id)
-
-    )
-
-    sale = result.scalar_one_or_none()
-
-    if not sale:
-
-        raise HTTPException(status_code=404, detail="Sale not found")
+    sale = await load_sale_for_user(db, user, tenant_id, sale_id)
 
     finalized = await finalize_sale_transaction(
 
@@ -619,11 +636,15 @@ async def list_customers(
 
     limit: int = Query(100, ge=1, le=500),
 
+    branch_id: str | None = Query(None, description="Filter by branch (owner only)"),
+
 ):
 
     tenant_id = require_tenant(user)
 
     q = select(Customer).where(Customer.tenant_id == tenant_id)
+
+    q = apply_customer_branch_filter(q, user, branch_id)
 
     if search:
 
@@ -655,7 +676,13 @@ async def create_customer(
 
     tenant_id = require_tenant(user)
 
-    customer = Customer(tenant_id=tenant_id, **body.model_dump())
+    branch_id = get_staff_branch_id(user) or (
+        body.branch_id if body.branch_id and body.branch_id not in ("all", "") else None
+    )
+
+    payload = body.model_dump(exclude={"branch_id"})
+
+    customer = Customer(tenant_id=tenant_id, branch_id=branch_id, **payload)
 
     db.add(customer)
 
@@ -685,17 +712,7 @@ async def update_customer(
 
     tenant_id = require_tenant(user)
 
-    result = await db.execute(
-
-        select(Customer).where(Customer.id == customer_id, Customer.tenant_id == tenant_id)
-
-    )
-
-    customer = result.scalar_one_or_none()
-
-    if not customer:
-
-        raise HTTPException(status_code=404, detail="Customer not found")
+    customer = await load_customer_for_user(db, user, tenant_id, customer_id)
 
     updates = body.model_dump(exclude_unset=True)
 
@@ -739,17 +756,7 @@ async def adjust_stock(
 
     tenant_id = require_tenant(user)
 
-    result = await db.execute(
-
-        select(Product).where(Product.id == body.product_id, Product.tenant_id == tenant_id)
-
-    )
-
-    product = result.scalar_one_or_none()
-
-    if not product:
-
-        raise HTTPException(status_code=404, detail="Product not found")
+    product = await load_product_for_user(db, user, tenant_id, body.product_id)
 
 
 
@@ -823,7 +830,13 @@ async def list_movements(
 
     tenant_id = require_tenant(user)
 
+    staff_branch = get_staff_branch_id(user)
+
     q = select(StockMovement).where(StockMovement.tenant_id == tenant_id)
+
+    if staff_branch:
+
+        q = q.join(Product, Product.id == StockMovement.product_id).where(Product.branch_id == staff_branch)
 
     if product_id:
 

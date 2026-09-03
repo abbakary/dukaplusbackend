@@ -146,6 +146,7 @@ class ProductResponse(BaseModel):
     expiry_date: datetime | None = None
     requires_prescription: bool
     business_type: str
+    branch_id: str | None = None
     metadata_json: dict[str, Any] = {}
     is_active: bool
     created_at: datetime
@@ -218,6 +219,7 @@ class CustomerCreate(BaseModel):
     address: str = ""
     credit_limit: float = 0
     notes: str | None = None
+    branch_id: str | None = None
 
 
 class CustomerUpdate(BaseModel):
@@ -241,6 +243,7 @@ class CustomerResponse(BaseModel):
     loyalty_tier: str
     loyalty_points: int
     dunning_stage: str
+    branch_id: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

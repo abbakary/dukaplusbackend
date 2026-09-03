@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.branch_scope import is_tenant_wide_access
+from app.core.branch_scope import get_staff_branch_id, is_tenant_wide_access
 from app.core.deps import get_current_user, get_user_permissions, require_permission, require_tenant, require_vendor_subscription
 from app.core.security import DEFAULT_PERMISSIONS, hash_password
 from app.database import get_db
@@ -253,6 +253,8 @@ async def _tenant_entity(db: AsyncSession, model, entity_id: str, tenant_id: str
 @router.get("/suppliers", response_model=list[SupplierOut])
 async def list_suppliers(user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
     tid = require_tenant(user)
+    if get_staff_branch_id(user):
+        return []
     r = await db.execute(select(Supplier).where(Supplier.tenant_id == tid).order_by(Supplier.name))
     return r.scalars().all()
 
@@ -371,7 +373,10 @@ async def create_staff(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid role: {body.role}") from e
     branch_id = body.branch_id
-    if not branch_id:
+    staff_branch = get_staff_branch_id(user)
+    if staff_branch:
+        branch_id = staff_branch
+    elif not branch_id:
         br = await db.execute(select(Branch).where(Branch.tenant_id == tid).limit(1))
         b = br.scalar_one_or_none()
         branch_id = b.id if b else None
@@ -495,6 +500,8 @@ async def claim_my_daily_stipend(
 @router.get("/expenses", response_model=list[ExpenseOut])
 async def list_expenses(user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
     tid = require_tenant(user)
+    if get_staff_branch_id(user):
+        return []
     r = await db.execute(select(Expense).where(Expense.tenant_id == tid).order_by(Expense.expense_date.desc()))
     return r.scalars().all()
 

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.business_profiles import get_business_profile
+from app.core.branch_scope import get_staff_branch_id
 from app.core.deps import get_current_user, require_tenant, require_vendor_subscription
 from app.database import get_db
 from app.models import Branch, TenantWorkplaceState, User
@@ -193,7 +194,8 @@ async def get_workplace_state(
     tenant_id = require_tenant(user)
     biz = user.tenant.business_type.value if user.tenant else "retail"
     branches = await _tenant_branches(db, tenant_id)
-    branch_key = _resolve_branch_key(branch_id, branches)
+    staff_branch = get_staff_branch_id(user)
+    branch_key = staff_branch or _resolve_branch_key(branch_id, branches)
     row = await _get_or_create_state(db, tenant_id, biz)
     state = _normalize_root_state(dict(row.state_json), biz)
     branch_state = _get_branch_slice(state, branch_key, biz)
@@ -219,7 +221,8 @@ async def update_workplace_state(
     tenant_id = require_tenant(user)
     biz = user.tenant.business_type.value if user.tenant else "retail"
     branches = await _tenant_branches(db, tenant_id)
-    branch_key = _resolve_branch_key(branch_id, branches)
+    staff_branch = get_staff_branch_id(user)
+    branch_key = staff_branch or _resolve_branch_key(branch_id, branches)
     row = await _get_or_create_state(db, tenant_id, biz)
     state = _normalize_root_state(dict(row.state_json), biz)
     branch_state = _get_branch_slice(state, branch_key, biz)
