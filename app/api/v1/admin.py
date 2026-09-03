@@ -267,6 +267,7 @@ async def create_tenant(
         license_number=body.license_number,
         region=body.region,
         district=body.district,
+        plan_tier=body.plan,
     )
     tenant, _ = await create_tenant_with_owner(
         db,

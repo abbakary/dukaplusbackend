@@ -3,7 +3,9 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.security import get_user_by_email, hash_password
 from app.models import (
@@ -107,6 +109,15 @@ async def create_tenant_with_owner(
     )
     db.add(user)
     await db.flush()
-    await db.refresh(user, ["tenant", "staff"])
+
+    result = await db.execute(
+        select(User)
+        .where(User.id == user.id)
+        .options(
+            selectinload(User.tenant),
+            selectinload(User.staff).selectinload(StaffMember.branch),
+        )
+    )
+    user = result.scalar_one()
 
     return tenant, user
