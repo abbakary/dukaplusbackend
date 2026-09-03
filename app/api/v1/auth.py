@@ -28,6 +28,7 @@ from app.schemas import (
     TokenResponse,
     UserResponse,
 )
+from app.plan_tier_migration import migrate_plan_tier_enum
 from app.services.account_service import create_tenant_with_owner
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -108,6 +109,7 @@ async def login(body: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)]
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, db: Annotated[AsyncSession, Depends(get_db)]):
+    await migrate_plan_tier_enum()
     _, user = await create_tenant_with_owner(db, body)
     return _build_user_response(user)
 

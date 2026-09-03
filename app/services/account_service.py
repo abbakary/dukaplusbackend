@@ -34,6 +34,8 @@ async def create_tenant_with_owner(
             detail="Email already registered",
         )
 
+    email = body.email.strip().lower()
+
     try:
         biz_type = BusinessType(body.business_type)
     except ValueError:
@@ -47,7 +49,7 @@ async def create_tenant_with_owner(
     tenant = Tenant(
         name=body.business_name,
         owner_name=body.owner_name,
-        owner_email=body.email,
+        owner_email=email,
         owner_phone=body.phone,
         business_type=biz_type,
         region=body.region,
@@ -76,7 +78,7 @@ async def create_tenant_with_owner(
         tenant_id=tenant.id,
         branch_id=branch.id,
         name=body.owner_name,
-        email=body.email,
+        email=email,
         phone=body.phone,
         role=StaffRole.owner,
         permissions={
@@ -95,7 +97,7 @@ async def create_tenant_with_owner(
     await db.flush()
 
     user = User(
-        email=body.email,
+        email=email,
         hashed_password=hash_password(body.password),
         name=body.owner_name,
         phone=body.phone,

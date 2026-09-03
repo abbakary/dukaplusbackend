@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -10,6 +10,11 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
     device_info: str | None = None
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.strip().lower()
 
 
 class RegisterRequest(BaseModel):
@@ -24,6 +29,22 @@ class RegisterRequest(BaseModel):
     region: str = "Dar es Salaam"
     district: str = ""
     plan_tier: str = "starter"
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.strip().lower()
+
+    @field_validator("owner_name", "business_name", "phone", "region", "district", "tin_number", "license_number")
+    @classmethod
+    def strip_text(cls, v: str) -> str:
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("plan_tier")
+    @classmethod
+    def normalize_plan_tier(cls, v: str) -> str:
+        tier = (v or "starter").strip().lower()
+        return "starter" if tier == "free_starter" else tier
 
 
 class TokenResponse(BaseModel):
