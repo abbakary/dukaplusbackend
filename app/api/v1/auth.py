@@ -20,6 +20,7 @@ from app.database import get_db
 from app.models import (
     TenantStatus,
     User,
+    UserRole,
 )
 from app.schemas import (
     LoginRequest,
@@ -76,7 +77,10 @@ def _build_user_response(user: User) -> UserResponse:
         branch_id=branch_id,
         branch_name=branch_name,
         branch_type=branch_type,
-        is_branch_scoped=bool(branch_id and not is_tenant_wide_access(user)),
+        is_branch_scoped=(
+            user.role == UserRole.vendor_staff
+            or bool(branch_id and not is_tenant_wide_access(user))
+        ),
         permissions=get_user_permissions(user),
         language=user.language,
         status=status_val,

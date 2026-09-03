@@ -76,6 +76,7 @@ from app.schemas import (
 
 )
 
+from app.services.branch_service import get_tenant_default_branch_id
 from app.services.transaction_service import create_sale_transaction, finalize_sale_transaction
 
 
@@ -407,6 +408,8 @@ async def create_product(
     tenant = user.tenant
 
     auto_branch = get_staff_branch_id(user)
+    if not auto_branch and not body.branch_id:
+        auto_branch = await get_tenant_default_branch_id(db, tenant_id)
 
     product = Product(
 
@@ -676,9 +679,13 @@ async def create_customer(
 
     tenant_id = require_tenant(user)
 
-    branch_id = get_staff_branch_id(user) or (
-        body.branch_id if body.branch_id and body.branch_id not in ("all", "") else None
-    )
+    branch_id = get_staff_branch_id(user)
+    if not branch_id:
+        branch_id = (
+            body.branch_id if body.branch_id and body.branch_id not in ("all", "") else None
+        )
+    if not branch_id:
+        branch_id = await get_tenant_default_branch_id(db, tenant_id)
 
     payload = body.model_dump(exclude={"branch_id"})
 

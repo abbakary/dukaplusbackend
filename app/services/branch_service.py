@@ -11,6 +11,23 @@ from app.core.security import DEFAULT_PERMISSIONS, get_user_by_email, hash_passw
 from app.models import Branch, PlatformPlan, StaffMember, StaffRole, Tenant, User, UserRole
 
 
+async def get_tenant_default_branch_id(db: AsyncSession, tenant_id: str) -> str | None:
+    """HQ branch id, or the tenant's first branch."""
+    r = await db.execute(
+        select(Branch.id).where(
+            Branch.tenant_id == tenant_id,
+            Branch.branch_type == "main_hq",
+        ).limit(1)
+    )
+    hq = r.scalar_one_or_none()
+    if hq:
+        return hq
+    r2 = await db.execute(
+        select(Branch.id).where(Branch.tenant_id == tenant_id).order_by(Branch.created_at).limit(1)
+    )
+    return r2.scalar_one_or_none()
+
+
 class BranchAdminCreate(BaseModel):
     name: str
     email: EmailStr

@@ -19,6 +19,11 @@ def is_tenant_wide_access(user: User) -> bool:
 
 def get_staff_branch_id(user: User) -> str | None:
     """Branch id for branch-scoped staff; None for tenant-wide users."""
+    # Branch managers / cashiers are always isolated to their staff branch.
+    if user.role == UserRole.vendor_staff:
+        if user.staff and user.staff.branch_id:
+            return user.staff.branch_id
+        return None
     if is_tenant_wide_access(user):
         return None
     if user.staff and user.staff.branch_id:
