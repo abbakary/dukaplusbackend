@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -99,6 +99,35 @@ class UserResponse(BaseModel):
 
 # ── Products ──────────────────────────────────────────────────────────────────
 
+def _merge_product_metadata(
+    base: dict[str, Any] | None,
+    patch: dict[str, Any] | None = None,
+    *,
+    image_url: str | None = None,
+    vat_type: str | None = None,
+    clear_image: bool = False,
+) -> dict[str, Any]:
+    """Merge product metadata, keeping image_url / vat_type unless explicitly cleared."""
+    meta: dict[str, Any] = dict(base or {})
+    if patch:
+        for key, value in patch.items():
+            if value is None and key in ("image_url", "imageUrl"):
+                meta.pop("image_url", None)
+                meta.pop("imageUrl", None)
+            elif value is None:
+                continue
+            else:
+                meta[key] = value
+    if clear_image:
+        meta.pop("image_url", None)
+        meta.pop("imageUrl", None)
+    elif image_url:
+        meta["image_url"] = image_url
+    if vat_type:
+        meta["vat_type"] = vat_type
+    return meta
+
+
 class ProductCreate(BaseModel):
     name: str
     category: str = "General"
@@ -114,6 +143,37 @@ class ProductCreate(BaseModel):
     requires_prescription: bool = False
     branch_id: str | None = None
     metadata_json: dict[str, Any] = {}
+    # Accepted from mobile/web; folded into metadata_json
+    image_url: str | None = None
+    vat_type: str | None = None
+    description: str | None = None
+    location: str | None = None
+    supplier: str | None = None
+    business_type: str | None = None
+    is_drug: bool | None = None
+
+    @model_validator(mode="after")
+    def require_supplier_and_cost(self):
+        if self.cost <= 0:
+            raise ValueError("cost must be greater than zero")
+        meta = _merge_product_metadata(
+            self.metadata_json,
+            image_url=self.image_url,
+            vat_type=self.vat_type,
+        )
+        if self.description:
+            meta.setdefault("description", self.description)
+        if self.location:
+            meta.setdefault("location", self.location)
+        if self.supplier:
+            meta.setdefault("supplier_name", self.supplier)
+        if self.is_drug is not None:
+            meta["is_drug"] = self.is_drug
+        self.metadata_json = meta
+        supplier = meta.get("supplier_id") or meta.get("supplier_name") or meta.get("supplier")
+        if not supplier:
+            raise ValueError("supplier information is required in metadata_json")
+        return self
 
 
 class ProductUpdate(BaseModel):
@@ -129,6 +189,11 @@ class ProductUpdate(BaseModel):
     requires_prescription: bool | None = None
     is_active: bool | None = None
     metadata_json: dict[str, Any] | None = None
+    image_url: str | None = None
+    vat_type: str | None = None
+    description: str | None = None
+    location: str | None = None
+    supplier: str | None = None
 
 
 class ProductResponse(BaseModel):
@@ -150,8 +215,23 @@ class ProductResponse(BaseModel):
     metadata_json: dict[str, Any] = {}
     is_active: bool
     created_at: datetime
+    image_url: str | None = None
+    vat_type: str | None = None
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="after")
+    def expose_image_and_vat(self):
+        meta = self.metadata_json or {}
+        if not self.image_url:
+            url = meta.get("image_url") or meta.get("imageUrl")
+            if isinstance(url, str) and url:
+                self.image_url = url
+        if not self.vat_type:
+            vt = meta.get("vat_type") or meta.get("vatType")
+            if isinstance(vt, str) and vt:
+                self.vat_type = vt
+        return self
 
 
 # ── Sales ─────────────────────────────────────────────────────────────────────
@@ -262,6 +342,12 @@ class DashboardStats(BaseModel):
     outstanding_payables: float
     monthly_revenue: float
     top_products: list[dict[str, Any]] = []
+    gross_sales: float = 0
+    cogs: float = 0
+    gross_margin: float = 0
+    total_opex: float = 0
+    net_profit: float = 0
+    stock_value: float = 0
     cached: bool = False
 
 
@@ -333,6 +419,14 @@ class StockAdjustment(BaseModel):
     expiry_date: datetime | None = None
     notes: str | None = None
     client_id: str | None = None
+    unit_cost: float | None = None
+    supplier_id: str | None = None
+    supplier_name: str | None = None
+    tax_id: str | None = None
+    tax_rate: float | None = None
+    tax_amount: float | None = None
+    apply_vat: bool | None = None
+    vat_note: str | None = None
 
 
 class StockMovementResponse(BaseModel):

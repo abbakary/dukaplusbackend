@@ -37,45 +37,28 @@ from app.database import get_db
 from app.models import Customer, Product, Sale, StockMovement, Supplier, User
 
 from app.schemas import (
-
     CustomerCreate,
-
     CustomerResponse,
-
     CustomerUpdate,
-
     DashboardStats,
-
     PageMeta,
-
     PaginatedCustomers,
-
     PaginatedProducts,
-
     PaginatedSales,
-
     ProductCreate,
-
     ProductResponse,
-
     ProductUpdate,
-
     SaleCreate,
-
     SaleFinalize,
-
     SaleResponse,
-
     StockAdjustment,
-
     StockMovementResponse,
-
     SyncBatchRequest,
-
     SyncBatchResponse,
-
+    _merge_product_metadata,
 )
 
+from app.services.analytics_service import build_analytics_snapshot
 from app.services.branch_service import get_tenant_default_branch_id
 from app.services.transaction_service import create_sale_transaction, finalize_sale_transaction
 
@@ -321,6 +304,31 @@ async def dashboard_stats(
 
     )
 
+    stock_val_q = select(func.coalesce(func.sum(Product.stock * Product.cost), 0)).where(
+        Product.tenant_id == tenant_id, Product.is_active == True  # noqa: E712
+    )
+    if product_branch_clause is not None:
+        stock_val_q = stock_val_q.where(product_branch_clause)
+    payload["stock_value"] = float(await db.scalar(stock_val_q) or 0)
+
+    try:
+        snapshot = await build_analytics_snapshot(db, tenant_id, "month")
+        payload.update({
+            "gross_sales": snapshot.get("gross_sales", payload["monthly_revenue"]),
+            "cogs": snapshot.get("cogs", 0),
+            "gross_margin": snapshot.get("gross_margin", 0),
+            "total_opex": snapshot.get("total_opex", 0),
+            "net_profit": snapshot.get("net_profit", 0),
+        })
+    except Exception:
+        payload.update({
+            "gross_sales": payload["monthly_revenue"],
+            "cogs": 0,
+            "gross_margin": payload["monthly_revenue"],
+            "total_opex": 0,
+            "net_profit": payload["monthly_revenue"],
+        })
+
     await cache_set(cache_key, payload, settings.cache_ttl_seconds)
 
     return DashboardStats(**payload)
@@ -497,9 +505,36 @@ async def update_product(
 
     assert_branch_record_access(user, product.branch_id, label="product")
 
-    for field, value in body.model_dump(exclude_unset=True).items():
+    data = body.model_dump(exclude_unset=True)
+    meta_patch = data.pop("metadata_json", None)
+    image_url = data.pop("image_url", None)
+    vat_type = data.pop("vat_type", None)
+    description = data.pop("description", None)
+    location = data.pop("location", None)
+    supplier = data.pop("supplier", None)
 
+    for field, value in data.items():
         setattr(product, field, value)
+
+    patch = dict(meta_patch or {})
+    if description is not None:
+        patch["description"] = description
+    if location is not None:
+        patch["location"] = location
+    if supplier is not None:
+        patch["supplier_name"] = supplier
+    # Always merge metadata when any image/vat/meta fields touch the product
+    if meta_patch is not None or image_url is not None or vat_type is not None or description is not None or location is not None or supplier is not None:
+        clear_image = False
+        if meta_patch is not None and "image_url" in meta_patch and meta_patch.get("image_url") in (None, ""):
+            clear_image = True
+        product.metadata_json = _merge_product_metadata(
+            product.metadata_json if isinstance(product.metadata_json, dict) else {},
+            patch,
+            image_url=image_url,
+            vat_type=vat_type,
+            clear_image=clear_image,
+        )
 
     await db.flush()
 
@@ -787,7 +822,30 @@ async def adjust_stock(
 
         raise HTTPException(status_code=400, detail="Stock cannot go negative")
 
+    if body.unit_cost is not None and body.unit_cost > 0:
+        product.cost = body.unit_cost
 
+    if body.batch_number:
+        product.batch_number = body.batch_number
+    if body.expiry_date is not None:
+        product.expiry_date = body.expiry_date
+
+    # Preserve image/vat while attaching supplier on stock-in
+    if body.supplier_id or body.supplier_name:
+        product.metadata_json = _merge_product_metadata(
+            product.metadata_json if isinstance(product.metadata_json, dict) else {},
+            {
+                **({"supplier_id": body.supplier_id} if body.supplier_id else {}),
+                **({"supplier_name": body.supplier_name} if body.supplier_name else {}),
+            },
+        )
+
+    note_parts = [body.notes or ""]
+    if body.apply_vat and body.tax_amount:
+        note_parts.append(f"VAT: {body.tax_amount}")
+    if body.vat_note:
+        note_parts.append(body.vat_note)
+    notes = " — ".join(p for p in note_parts if p)
 
     movement = StockMovement(
 
@@ -813,7 +871,7 @@ async def adjust_stock(
 
         operator_name=user.name,
 
-        notes=body.notes,
+        notes=notes or None,
 
         client_id=body.client_id,
 
@@ -915,6 +973,51 @@ async def sync_batch(
 
                 processed += 1
 
+            elif item.entity_type == "product" and item.action == "create":
+                prod_data = ProductCreate(**item.payload)
+                tenant_id = require_tenant(user)
+                tenant = user.tenant
+                auto_branch = get_staff_branch_id(user)
+                if not auto_branch and not prod_data.branch_id:
+                    auto_branch = await get_tenant_default_branch_id(db, tenant_id)
+                product = Product(
+                    tenant_id=tenant_id,
+                    branch_id=prod_data.branch_id or auto_branch,
+                    name=prod_data.name,
+                    category=prod_data.category,
+                    sku=prod_data.sku,
+                    barcode=prod_data.barcode,
+                    price=prod_data.price,
+                    cost=prod_data.cost,
+                    stock=prod_data.stock,
+                    reorder_point=prod_data.reorder_point,
+                    unit=prod_data.unit,
+                    batch_number=prod_data.batch_number,
+                    expiry_date=prod_data.expiry_date,
+                    requires_prescription=prod_data.requires_prescription,
+                    business_type=tenant.business_type if tenant else "retail",
+                    metadata_json=prod_data.metadata_json,
+                )
+                db.add(product)
+                await db.flush()
+                processed += 1
+            elif item.entity_type == "customer" and item.action == "create":
+                cust_data = CustomerCreate(**item.payload)
+                tenant_id = require_tenant(user)
+                branch_id = get_staff_branch_id(user)
+                if not branch_id:
+                    branch_id = (
+                        cust_data.branch_id
+                        if cust_data.branch_id and cust_data.branch_id not in ("all", "")
+                        else None
+                    )
+                if not branch_id:
+                    branch_id = await get_tenant_default_branch_id(db, tenant_id)
+                payload = cust_data.model_dump(exclude={"branch_id"})
+                customer = Customer(tenant_id=tenant_id, branch_id=branch_id, **payload)
+                db.add(customer)
+                await db.flush()
+                processed += 1
             elif item.entity_type == "stock" and item.action == "adjust":
 
                 adj = StockAdjustment(**item.payload)

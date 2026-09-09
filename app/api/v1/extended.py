@@ -213,6 +213,16 @@ class POItemCreate(BaseModel):
     total: float | None = None
     batch_number: str | None = None
     expiry_date: str | None = None
+    selling_price: float | None = None
+    unit_price: float | None = None
+    tax_id: str | None = None
+    tax_rate: float | None = None
+    tax_amount: float | None = None
+    sku: str | None = None
+    unit: str | None = None
+    category: str | None = None
+    vat_type: str | None = None
+    metadata: dict | None = None
 
 
 class PurchaseOrderCreate(BaseModel):
@@ -220,6 +230,15 @@ class PurchaseOrderCreate(BaseModel):
     items: list[POItemCreate]
     notes: str | None = None
     expected_date: str | None = None
+    payment_terms: str | None = None
+    vendor_reference: str | None = None
+    currency: str | None = None
+    subtotal: float | None = None
+    vat_amount: float | None = None
+    total_amount: float | None = None
+    purchase_vat_scope: str | None = None
+    vat_note: str | None = None
+    branch_id: str | None = None
 
 
 class PurchaseOrderOut(BaseModel):
@@ -235,11 +254,24 @@ class PurchaseOrderOut(BaseModel):
     notes: str | None
     branch_id: str | None = None
     created_at: datetime
+    vat_amount: float = 0
+    purchase_vat_scope: str | None = None
+    vat_note: str | None = None
     model_config = {"from_attributes": True}
+
+
+class POReceiveItem(BaseModel):
+    product_id: str | None = None
+    product_name: str | None = None
+    selling_price: float | None = None
+    unit_price: float | None = None
+    unit_cost: float | None = None
+    quantity: float | None = None
 
 
 class POReceiveRequest(BaseModel):
     notes: str | None = None
+    items: list[POReceiveItem] | None = None
 
 
 async def _tenant_entity(db: AsyncSession, model, entity_id: str, tenant_id: str):
@@ -637,10 +669,18 @@ async def create_purchase_order(
     sup = await _tenant_entity(db, Supplier, body.supplier_id, tid)
     items = []
     subtotal = 0.0
+    vat_amount = float(body.vat_amount or 0)
+    computed_vat = 0.0
     for it in body.items:
         total = it.total if it.total is not None else it.quantity * it.unit_cost
         subtotal += total
-        items.append({
+        line_tax = float(it.tax_amount or 0)
+        computed_vat += line_tax
+        meta = dict(it.metadata or {})
+        if it.vat_type:
+            meta["vat_type"] = it.vat_type
+        selling = it.selling_price if it.selling_price is not None else it.unit_price
+        row = {
             "product_id": it.product_id,
             "product_name": it.product_name,
             "quantity": it.quantity,
@@ -648,9 +688,25 @@ async def create_purchase_order(
             "total": total,
             "batch_number": it.batch_number,
             "expiry_date": it.expiry_date,
-        })
+            "tax_id": it.tax_id,
+            "tax_rate": it.tax_rate,
+            "tax_amount": line_tax,
+            "sku": it.sku,
+            "unit": it.unit,
+            "category": it.category,
+            "vat_type": it.vat_type,
+            "metadata": meta,
+        }
+        if selling is not None and float(selling) > 0:
+            row["selling_price"] = float(selling)
+            row["unit_price"] = float(selling)
+        items.append(row)
+    if vat_amount <= 0:
+        vat_amount = computed_vat
+    header_subtotal = float(body.subtotal) if body.subtotal is not None else subtotal
+    total_amount = float(body.total_amount) if body.total_amount is not None else (header_subtotal + vat_amount)
     po_num = f"PO-{datetime.now(UTC).strftime('%Y%m%d')}-{len(items)}"
-    branch = get_staff_branch_id(user)
+    branch = body.branch_id or get_staff_branch_id(user)
     if not branch and body.items:
         first_pid = body.items[0].product_id
         if first_pid:
@@ -660,6 +716,20 @@ async def create_purchase_order(
                 branch = prod.branch_id
     if not branch:
         branch = await get_tenant_default_branch_id(db, tid)
+    note_parts = [body.notes or ""]
+    if body.vat_note:
+        note_parts.append(f"VAT: {body.vat_note}")
+    if body.purchase_vat_scope:
+        note_parts.append(f"purchase_vat_scope={body.purchase_vat_scope}")
+    notes = "\n".join(p for p in note_parts if p) or None
+    # Persist header VAT meta on first line for round-trip without DB migration
+    if items:
+        items[0] = {
+            **items[0],
+            "purchase_vat_scope": body.purchase_vat_scope,
+            "vat_note": body.vat_note,
+            "po_vat_amount": vat_amount,
+        }
     po = PurchaseOrder(
         tenant_id=tid,
         branch_id=branch,
@@ -668,13 +738,29 @@ async def create_purchase_order(
         supplier_name=sup.name,
         status="sent",
         items=items,
-        subtotal=subtotal,
-        total_amount=subtotal,
-        notes=body.notes,
+        subtotal=header_subtotal,
+        total_amount=total_amount,
+        notes=notes,
     )
     db.add(po)
     await db.flush()
-    return po
+    return PurchaseOrderOut(
+        id=po.id,
+        po_number=po.po_number,
+        supplier_id=po.supplier_id,
+        supplier_name=po.supplier_name,
+        status=po.status,
+        items=po.items,
+        subtotal=po.subtotal,
+        total_amount=po.total_amount,
+        paid_amount=po.paid_amount,
+        notes=po.notes,
+        branch_id=po.branch_id,
+        created_at=po.created_at,
+        vat_amount=vat_amount,
+        purchase_vat_scope=body.purchase_vat_scope,
+        vat_note=body.vat_note,
+    )
 
 
 @router.post("/purchase-orders/{po_id}/receive", response_model=PurchaseOrderOut)
@@ -684,10 +770,19 @@ async def receive_purchase_order(
     user: Annotated[User, Depends(require_permission("canModifyInventory"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    from app.schemas import _merge_product_metadata
+
     tid = require_tenant(user)
     po = await _tenant_entity(db, PurchaseOrder, po_id, tid)
     if po.status == "received":
         raise HTTPException(status_code=400, detail="PO already received")
+
+    overrides: dict[str, POReceiveItem] = {}
+    for ov in body.items or []:
+        if ov.product_id:
+            overrides[ov.product_id] = ov
+        if ov.product_name:
+            overrides[f"name:{ov.product_name}"] = ov
 
     for item in po.items:
         qty = float(item.get("quantity", 0))
@@ -696,26 +791,67 @@ async def receive_purchase_order(
         if product_id:
             pr = await db.execute(select(Product).where(Product.id == product_id, Product.tenant_id == tid))
             product = pr.scalar_one_or_none()
+
+        ov = overrides.get(product_id or "") or overrides.get(f"name:{item.get('product_name', '')}")
+        unit_cost = float(
+            (ov.unit_cost if ov and ov.unit_cost is not None else None)
+            or item.get("unit_cost")
+            or 0
+        )
+        selling = float(
+            (ov.selling_price if ov and ov.selling_price is not None else None)
+            or (ov.unit_price if ov and ov.unit_price is not None else None)
+            or item.get("selling_price")
+            or item.get("unit_price")
+            or 0
+        )
+        item_meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        vat_type = item.get("vat_type") or item_meta.get("vat_type")
+        image_url = item_meta.get("image_url") or item_meta.get("imageUrl") or item.get("image_url")
+
         if not product:
-            sku = f"PO-{po.po_number}-{item.get('product_name', '')[:8]}"
+            sku = item.get("sku") or f"PO-{po.po_number}-{item.get('product_name', '')[:8]}"
+            meta = _merge_product_metadata(
+                {"supplier_name": po.supplier_name, "supplier_id": po.supplier_id},
+                item_meta,
+                image_url=image_url if isinstance(image_url, str) else None,
+                vat_type=vat_type if isinstance(vat_type, str) else None,
+            )
             product = Product(
                 tenant_id=tid,
                 branch_id=po.branch_id or get_staff_branch_id(user),
                 name=item.get("product_name", "Imported Item"),
-                category="Procurement",
+                category=item.get("category") or "Procurement",
                 sku=sku,
-                price=float(item.get("unit_cost", 0)) * 1.2,
-                cost=float(item.get("unit_cost", 0)),
+                price=selling if selling > 0 else unit_cost * 1.2,
+                cost=unit_cost,
                 stock=0,
-                unit="pcs",
+                unit=item.get("unit") or "pcs",
                 batch_number=item.get("batch_number"),
                 business_type=user.tenant.business_type.value if user.tenant else "retail",
+                metadata_json=meta,
             )
             db.add(product)
             await db.flush()
+        else:
+            if unit_cost > 0:
+                product.cost = unit_cost
+            if selling > 0:
+                product.price = selling
+            product.metadata_json = _merge_product_metadata(
+                product.metadata_json if isinstance(product.metadata_json, dict) else {},
+                {
+                    **item_meta,
+                    "supplier_id": po.supplier_id,
+                    "supplier_name": po.supplier_name,
+                },
+                image_url=image_url if isinstance(image_url, str) else None,
+                vat_type=vat_type if isinstance(vat_type, str) else None,
+            )
 
         prev = product.stock
-        product.stock += qty
+        recv_qty = float(ov.quantity) if ov and ov.quantity is not None else qty
+        product.stock += recv_qty
         if item.get("batch_number"):
             product.batch_number = item.get("batch_number")
         db.add(StockMovement(
@@ -724,7 +860,7 @@ async def receive_purchase_order(
             product_name=product.name,
             sku=product.sku,
             movement_type="in_po",
-            quantity=qty,
+            quantity=recv_qty,
             previous_stock=prev,
             new_stock=product.stock,
             batch_number=item.get("batch_number"),
@@ -741,4 +877,24 @@ async def receive_purchase_order(
     sup = await _tenant_entity(db, Supplier, po.supplier_id, tid)
     sup.outstanding_payable += po.total_amount - po.paid_amount
     await db.flush()
-    return po
+    first = (po.items or [{}])[0] if po.items else {}
+    vat_amount = float(first.get("po_vat_amount") or 0)
+    if vat_amount <= 0:
+        vat_amount = sum(float(i.get("tax_amount") or 0) for i in (po.items or []) if isinstance(i, dict))
+    return PurchaseOrderOut(
+        id=po.id,
+        po_number=po.po_number,
+        supplier_id=po.supplier_id,
+        supplier_name=po.supplier_name,
+        status=po.status,
+        items=po.items,
+        subtotal=po.subtotal,
+        total_amount=po.total_amount,
+        paid_amount=po.paid_amount,
+        notes=po.notes,
+        branch_id=po.branch_id,
+        created_at=po.created_at,
+        vat_amount=vat_amount,
+        purchase_vat_scope=first.get("purchase_vat_scope") if isinstance(first, dict) else None,
+        vat_note=first.get("vat_note") if isinstance(first, dict) else None,
+    )
