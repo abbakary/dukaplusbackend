@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -80,7 +80,7 @@ class TenantStatusUpdate(BaseModel):
 class AdminCreateTenantRequest(BaseModel):
     business_name: str
     owner_name: str
-    email: str
+    email: EmailStr
     phone: str
     password: str
     business_type: str = "retail"
@@ -91,6 +91,16 @@ class AdminCreateTenantRequest(BaseModel):
     plan: str = "starter"
     status: str = "active"
 
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.strip().lower()
+
+    @field_validator("business_name", "owner_name", "phone", "region", "district", "tin_number", "license_number")
+    @classmethod
+    def strip_text(cls, v: str) -> str:
+        return v.strip() if isinstance(v, str) else v
+
     @field_validator("password")
     @classmethod
     def validate_password(cls, v: str) -> str:
@@ -99,12 +109,23 @@ class AdminCreateTenantRequest(BaseModel):
             raise ValueError("Password must be at least 6 characters")
         return cleaned
 
+    @field_validator("plan")
+    @classmethod
+    def normalize_plan(cls, v: str) -> str:
+        tier = (v or "starter").strip().lower()
+        return "starter" if tier == "free_starter" else tier
+
 
 class AdminCreateSuperAdminRequest(BaseModel):
     name: str
-    email: str
+    email: EmailStr
     phone: str = ""
     password: str
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.strip().lower()
 
     @field_validator("password")
     @classmethod
