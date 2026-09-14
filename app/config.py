@@ -63,7 +63,11 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key-change-in-production"
     access_token_expire_days: int = 3
     refresh_token_expire_days: int = 30
-    cors_origins: str = "http://localhost:5173,http://localhost:3000,http://localhost:4173,https://dukaplusapp.vercel.app"
+    cors_origins: str = (
+        "http://localhost:5173,http://localhost:3000,http://localhost:4173,"
+        "https://dukaplusapp.vercel.app,https://dukalangu-red.vercel.app,"
+        "https://dukalangu.vercel.app"
+    )
     gemini_api_key: str = ""
     environment: str = "development"
     app_name: str = "Duka+ API"

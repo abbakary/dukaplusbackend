@@ -13,6 +13,8 @@ from app.models import Product, User
 from app.schemas import SaleItemCreate
 
 DEFAULT_BUSINESS_SETTINGS: dict[str, Any] = {
+    "mode": "manual",
+    "vatRegistered": False,
     "discountEnabled": True,
     "maxDiscountPercent": 15,
     "showDiscountOnReceipts": True,
@@ -21,8 +23,10 @@ DEFAULT_BUSINESS_SETTINGS: dict[str, Any] = {
     "priceOverrideEnabled": False,
     "partialPaymentEnabled": True,
     "negotiationEnabled": True,
-    "vatEnabled": True,
+    "vatEnabled": False,
     "vatRate": 0.18,
+    "pricesIncludeVat": False,
+    "showVatOnReceipt": True,
 }
 
 

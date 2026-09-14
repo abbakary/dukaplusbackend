@@ -9,27 +9,82 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from typing import Any
+
 from app.config import settings
 from app.models import Customer, Product, Sale, StockMovement, TenantSettings, User
 from app.schemas import PaymentCreate, SaleCreate, SaleItemCreate
 from app.core.branch_scope import assert_branch_record_access, get_staff_branch_id, resolve_sale_branch_id
-from app.core.pricing_policy import validate_sale_pricing
+from app.core.pricing_policy import merge_business_settings, validate_sale_pricing
 
 
 COMPLETED_STATUSES = frozenset({"completed", "pending_credit"})
 DRAFT_STATUSES = frozenset({"open", "pending_completion", "requires_attention", "ready_to_complete"})
 
 
-def compute_sale_totals(items: list[SaleItemCreate], payments: list[PaymentCreate]) -> dict:
-    subtotal = sum(item.total for item in items)
-    vat = round(subtotal * settings.vat_rate, 2)
-    total = subtotal + vat
-    paid = sum(p.amount for p in payments)
-    balance = max(0.0, total - paid)
+def _is_vat_active(business_settings: dict[str, Any] | None) -> bool:
+    bs = merge_business_settings(business_settings)
+    mode = str(bs.get("mode") or "manual")
+    vat_registered = bs.get("vatRegistered")
+    if vat_registered is None:
+        vat_registered = mode != "non_vat"
+    if not vat_registered or mode == "non_vat":
+        return False
+    if mode == "tra_efd":
+        return True
+    return bool(bs.get("vatEnabled", True))
+
+
+def _vat_rate(business_settings: dict[str, Any] | None) -> float:
+    bs = merge_business_settings(business_settings)
+    try:
+        rate = float(bs.get("vatRate", settings.vat_rate))
+    except (TypeError, ValueError):
+        rate = float(settings.vat_rate)
+    return max(0.0, min(rate, 1.0))
+
+
+def compute_sale_totals(
+    items: list[SaleItemCreate],
+    payments: list[PaymentCreate],
+    *,
+    business_settings: dict[str, Any] | None = None,
+    subtotal: float | None = None,
+    vat_amount: float | None = None,
+    total: float | None = None,
+    apply_vat: bool | None = None,
+) -> dict:
+    """Respect tenant tax settings and explicit POS totals (incl. vat_amount=0)."""
+    items_subtotal = round(sum(float(item.total) for item in items), 2)
+    sub = round(float(subtotal), 2) if subtotal is not None else items_subtotal
+
+    vat_active = _is_vat_active(business_settings) if apply_vat is None else bool(apply_vat)
+    rate = _vat_rate(business_settings)
+    prices_include = bool(merge_business_settings(business_settings).get("pricesIncludeVat"))
+
+    if vat_amount is not None:
+        vat = max(0.0, round(float(vat_amount), 2))
+    elif vat_active:
+        if prices_include and rate > 0:
+            vat = round(sub - (sub / (1 + rate)), 2)
+        else:
+            vat = round(sub * rate, 2)
+    else:
+        vat = 0.0
+
+    if total is not None:
+        tot = max(0.0, round(float(total), 2))
+    elif prices_include and vat_active:
+        tot = sub
+    else:
+        tot = round(sub + vat, 2)
+
+    paid = round(sum(float(p.amount) for p in payments), 2)
+    balance = max(0.0, round(tot - paid, 2))
     return {
-        "subtotal": subtotal,
+        "subtotal": sub,
         "vat_amount": vat,
-        "total": total,
+        "total": tot,
         "paid_amount": paid,
         "balance_remaining": balance,
     }
@@ -125,7 +180,15 @@ async def create_sale_transaction(
         business_settings=business_settings,
     )
 
-    totals = compute_sale_totals(body.items, body.payments)
+    totals = compute_sale_totals(
+        body.items,
+        body.payments,
+        business_settings=business_settings,
+        subtotal=body.subtotal,
+        vat_amount=body.vat_amount,
+        total=body.total,
+        apply_vat=body.apply_vat,
+    )
     sale_branch_id = await resolve_sale_branch_id(db, user, tenant_id, body.branch_id)
     receipt = f"RCP-{datetime.now(UTC).strftime('%Y%m%d')}-{secrets.token_hex(3).upper()}"
     status = resolve_sale_status(
@@ -201,9 +264,25 @@ async def finalize_sale_transaction(
     if customer_name is not None:
         sale.customer_name = customer_name
 
+    settings_row = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
+    )
+    tenant_settings = settings_row.scalar_one_or_none()
+    business_settings = tenant_settings.business_settings if tenant_settings else None
+
     items = [SaleItemCreate(**i) for i in (sale.items or [])]
     payment_objs = [PaymentCreate(**p) for p in (sale.payments or [])]
-    totals = compute_sale_totals(items, payment_objs)
+    # Preserve original VAT intent (including zero for non-VAT sales)
+    original_vat = float(sale.vat_amount or 0)
+    totals = compute_sale_totals(
+        items,
+        payment_objs,
+        business_settings=business_settings,
+        subtotal=float(sale.subtotal) if sale.subtotal is not None else None,
+        vat_amount=original_vat,
+        total=float(sale.total) if sale.total is not None else None,
+        apply_vat=original_vat > 0,
+    )
 
     sale.subtotal = totals["subtotal"]
     sale.vat_amount = totals["vat_amount"]
@@ -219,6 +298,7 @@ async def finalize_sale_transaction(
             receipt=sale.receipt_number,
             operator_name=user.name,
             validate_stock=True,
+            branch_id=sale.branch_id or get_staff_branch_id(user),
         )
 
     if sale.customer_id and totals["balance_remaining"] > 0:
