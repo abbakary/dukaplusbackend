@@ -68,6 +68,21 @@ class SupplierUpdate(BaseModel):
     rating: float | None = None
 
 
+class SupplierPayRequest(BaseModel):
+    amount: float
+    payment_method: str | None = None
+    notes: str | None = None
+    branch_id: str | None = None
+
+
+class SupplierPayOut(BaseModel):
+    supplier_id: str
+    amount_paid: float
+    balance_before: float
+    balance_after: float
+    updated_po_ids: list[str] = []
+
+
 class BranchOut(BaseModel):
     id: str
     name: str
@@ -260,6 +275,12 @@ class PurchaseOrderOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PurchaseOrderUpdate(BaseModel):
+    status: str | None = None
+    notes: str | None = None
+    paid_amount: float | None = None
+
+
 class POReceiveItem(BaseModel):
     product_id: str | None = None
     product_name: str | None = None
@@ -315,10 +336,140 @@ async def update_supplier(
 ):
     tid = require_tenant(user)
     sup = await _tenant_entity(db, Supplier, supplier_id, tid)
-    for k, v in body.model_dump(exclude_unset=True).items():
+    data = body.model_dump(exclude_unset=True)
+    old_outstanding = float(sup.outstanding_payable or 0)
+    for k, v in data.items():
         setattr(sup, k, v)
+
+    # When clients reduce outstanding_payable (legacy pay flow), also settle open POs.
+    if "outstanding_payable" in data and data["outstanding_payable"] is not None:
+        new_outstanding = max(0.0, float(data["outstanding_payable"]))
+        payment = max(0.0, old_outstanding - new_outstanding)
+        if payment > 0:
+            await _apply_payment_to_supplier_pos(db, tid, supplier_id, payment)
+            all_r = await db.execute(
+                select(PurchaseOrder).where(
+                    PurchaseOrder.tenant_id == tid,
+                    PurchaseOrder.supplier_id == supplier_id,
+                    PurchaseOrder.status != "cancelled",
+                )
+            )
+            recomputed = sum(
+                max(0.0, float(po.total_amount or 0) - float(po.paid_amount or 0))
+                for po in all_r.scalars().all()
+            )
+            # Keep the lower of explicit target vs PO recomputation so full pay clears.
+            sup.outstanding_payable = min(new_outstanding, recomputed)
+
     await db.flush()
     return sup
+
+
+async def _apply_payment_to_supplier_pos(
+    db: AsyncSession,
+    tenant_id: str,
+    supplier_id: str,
+    amount: float,
+    branch_id: str | None = None,
+) -> list[str]:
+    """Apply payment FIFO to open purchase orders. Returns updated PO ids."""
+    if amount <= 0:
+        return []
+    q = (
+        select(PurchaseOrder)
+        .where(
+            PurchaseOrder.tenant_id == tenant_id,
+            PurchaseOrder.supplier_id == supplier_id,
+            PurchaseOrder.status != "cancelled",
+        )
+        .order_by(PurchaseOrder.created_at.asc())
+    )
+    if branch_id:
+        q = q.where(PurchaseOrder.branch_id == branch_id)
+    r = await db.execute(q)
+    remaining = amount
+    updated_ids: list[str] = []
+    for po in r.scalars().all():
+        if remaining <= 0:
+            break
+        owed = max(0.0, float(po.total_amount or 0) - float(po.paid_amount or 0))
+        if owed <= 0:
+            continue
+        pay = min(remaining, owed)
+        po.paid_amount = float(po.paid_amount or 0) + pay
+        remaining -= pay
+        updated_ids.append(po.id)
+    return updated_ids
+
+
+@router.post("/suppliers/{supplier_id}/pay", response_model=SupplierPayOut)
+async def pay_supplier(
+    supplier_id: str,
+    body: SupplierPayRequest,
+    user: Annotated[User, Depends(require_permission("canManageSuppliers"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Apply a supplier payment to open POs (FIFO) and refresh outstanding_payable."""
+    tid = require_tenant(user)
+    amount = float(body.amount or 0)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
+
+    sup = await _tenant_entity(db, Supplier, supplier_id, tid)
+    effective = resolve_branch_filter(user, body.branch_id)
+
+    q = (
+        select(PurchaseOrder)
+        .where(
+            PurchaseOrder.tenant_id == tid,
+            PurchaseOrder.supplier_id == supplier_id,
+            PurchaseOrder.status != "cancelled",
+        )
+        .order_by(PurchaseOrder.created_at.asc())
+    )
+    if effective:
+        q = q.where(PurchaseOrder.branch_id == effective)
+    r = await db.execute(q)
+    orders = list(r.scalars().all())
+
+    balance_before = sum(max(0.0, float(po.total_amount or 0) - float(po.paid_amount or 0)) for po in orders)
+    if balance_before <= 0:
+        balance_before = max(0.0, float(sup.outstanding_payable or 0))
+
+    apply_amount = min(amount, balance_before if balance_before > 0 else amount)
+    updated_ids = await _apply_payment_to_supplier_pos(
+        db, tid, supplier_id, apply_amount, branch_id=effective
+    )
+
+    all_r = await db.execute(
+        select(PurchaseOrder).where(
+            PurchaseOrder.tenant_id == tid,
+            PurchaseOrder.supplier_id == supplier_id,
+            PurchaseOrder.status != "cancelled",
+        )
+    )
+    all_orders = list(all_r.scalars().all())
+    balance_after = sum(
+        max(0.0, float(po.total_amount or 0) - float(po.paid_amount or 0)) for po in all_orders
+    )
+    if not updated_ids and float(sup.outstanding_payable or 0) > 0:
+        balance_before = max(balance_before, float(sup.outstanding_payable or 0))
+        balance_after = max(0.0, float(sup.outstanding_payable or 0) - amount)
+
+    sup.outstanding_payable = balance_after
+    if body.notes:
+        note = f"Payment {amount:.0f} via {body.payment_method or 'cash'} - {body.notes}"
+        for po in orders:
+            if po.id in updated_ids:
+                po.notes = f"{po.notes or ''}\n{note}".strip()
+    await db.flush()
+    return SupplierPayOut(
+        supplier_id=sup.id,
+        amount_paid=min(amount, balance_before) if balance_before > 0 else amount,
+        balance_before=balance_before,
+        balance_after=balance_after,
+        updated_po_ids=updated_ids,
+    )
 
 
 @router.delete("/suppliers/{supplier_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -760,6 +911,65 @@ async def create_purchase_order(
         vat_amount=vat_amount,
         purchase_vat_scope=body.purchase_vat_scope,
         vat_note=body.vat_note,
+    )
+
+
+@router.patch("/purchase-orders/{po_id}", response_model=PurchaseOrderOut)
+async def update_purchase_order(
+    po_id: str,
+    body: PurchaseOrderUpdate,
+    user: Annotated[User, Depends(require_permission("canManageSuppliers"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    tid = require_tenant(user)
+    po = await _tenant_entity(db, PurchaseOrder, po_id, tid)
+    data = body.model_dump(exclude_unset=True)
+    if "status" in data and data["status"] is not None:
+        po.status = data["status"]
+    if "notes" in data and data["notes"] is not None:
+        po.notes = data["notes"]
+    if "paid_amount" in data and data["paid_amount"] is not None:
+        paid = max(0.0, float(data["paid_amount"]))
+        po.paid_amount = min(paid, float(po.total_amount or 0))
+        # Keep supplier outstanding in sync when paid_amount changes
+        if po.supplier_id:
+            all_r = await db.execute(
+                select(PurchaseOrder).where(
+                    PurchaseOrder.tenant_id == tid,
+                    PurchaseOrder.supplier_id == po.supplier_id,
+                    PurchaseOrder.status != "cancelled",
+                )
+            )
+            owed = sum(
+                max(0.0, float(row.total_amount or 0) - float(row.paid_amount or 0))
+                for row in all_r.scalars().all()
+            )
+            try:
+                sup = await _tenant_entity(db, Supplier, po.supplier_id, tid)
+                sup.outstanding_payable = owed
+            except HTTPException:
+                pass
+    await db.flush()
+    first = (po.items or [{}])[0] if po.items else {}
+    vat_amount = float(first.get("po_vat_amount") or 0) if isinstance(first, dict) else 0
+    if vat_amount <= 0:
+        vat_amount = sum(float(i.get("tax_amount") or 0) for i in (po.items or []) if isinstance(i, dict))
+    return PurchaseOrderOut(
+        id=po.id,
+        po_number=po.po_number,
+        supplier_id=po.supplier_id,
+        supplier_name=po.supplier_name,
+        status=po.status,
+        items=po.items,
+        subtotal=po.subtotal,
+        total_amount=po.total_amount,
+        paid_amount=po.paid_amount,
+        notes=po.notes,
+        branch_id=po.branch_id,
+        created_at=po.created_at,
+        vat_amount=vat_amount,
+        purchase_vat_scope=first.get("purchase_vat_scope") if isinstance(first, dict) else None,
+        vat_note=first.get("vat_note") if isinstance(first, dict) else None,
     )
 
 
