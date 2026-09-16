@@ -196,6 +196,17 @@ class ProductUpdate(BaseModel):
     supplier: str | None = None
 
 
+class ProductScanLabelsResponse(BaseModel):
+    product_id: str
+    name: str
+    sku: str
+    barcode_value: str
+    qr_payload: str
+    qr_png_base64: str
+    barcode_png_base64: str
+    format: str = "duka_plus_v1"
+
+
 class ProductResponse(BaseModel):
     id: str
     name: str

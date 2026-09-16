@@ -35,6 +35,7 @@ from app.core.ttl_cache import cache_get, cache_set, invalidate_tenant_cache, te
 from app.database import get_db
 
 from app.models import Customer, Product, Sale, StockMovement, Supplier, User
+from app.services import product_labels as label_service
 
 from app.schemas import (
     CustomerCreate,
@@ -47,6 +48,7 @@ from app.schemas import (
     PaginatedSales,
     ProductCreate,
     ProductResponse,
+    ProductScanLabelsResponse,
     ProductUpdate,
     SaleCreate,
     SaleFinalize,
@@ -404,7 +406,35 @@ async def list_products(
     return PaginatedProducts(items=items, meta=_page_meta(total, skip, limit))
 
 
-
+@router.get("/products/{product_id}/scan-labels", response_model=ProductScanLabelsResponse)
+async def get_product_scan_labels(
+    product_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """QR + Code128 assets for shelf labels (SKU-only opaque QR payload)."""
+    tenant_id = require_tenant(user)
+    result = await db.execute(
+        select(Product).where(Product.id == product_id, Product.tenant_id == tenant_id, Product.is_active == True)  # noqa: E712
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    assert_branch_record_access(user, product.branch_id, label="product")
+    try:
+        assets = label_service.build_product_label_assets(sku=product.sku, barcode=product.barcode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ProductScanLabelsResponse(
+        product_id=product.id,
+        name=product.name,
+        sku=assets["sku"],
+        barcode_value=assets["barcode_value"],
+        qr_payload=assets["qr_payload"],
+        qr_png_base64=assets["qr_png_base64"],
+        barcode_png_base64=assets["barcode_png_base64"],
+        format=assets["format"],
+    )
 
 
 @router.post("/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
