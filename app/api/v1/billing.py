@@ -372,3 +372,58 @@ async def send_broadcast(
     db.add(broadcast)
     await db.flush()
     return _broadcast_out(broadcast)
+
+
+# ── Platform billing settings (trial + Lipa / WhatsApp) ───────────────────────
+
+class BillingSettingsOut(BaseModel):
+    trial_days: int
+    grace_days: int
+    lipa_number: str
+    lipa_name: str
+    whatsapp_number: str
+    support_note_en: str
+    support_note_sw: str
+
+
+class BillingSettingsUpdate(BaseModel):
+    trial_days: int | None = None
+    grace_days: int | None = None
+    lipa_number: str | None = None
+    lipa_name: str | None = None
+    whatsapp_number: str | None = None
+    support_note_en: str | None = None
+    support_note_sw: str | None = None
+
+
+@router.get("/platform/billing-settings", response_model=BillingSettingsOut)
+async def public_billing_settings(db: Annotated[AsyncSession, Depends(get_db)]):
+    from app.services.platform_billing import get_billing_settings
+
+    return BillingSettingsOut(**await get_billing_settings(db))
+
+
+@router.get("/admin/billing-settings", response_model=BillingSettingsOut)
+async def admin_get_billing_settings(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_roles(UserRole.super_admin))],
+):
+    from app.services.platform_billing import get_billing_settings
+
+    return BillingSettingsOut(**await get_billing_settings(db))
+
+
+@router.patch("/admin/billing-settings", response_model=BillingSettingsOut)
+async def admin_patch_billing_settings(
+    body: BillingSettingsUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_roles(UserRole.super_admin))],
+):
+    from app.services.platform_billing import update_billing_settings
+    from app.core.subscription import set_grace_days_cache
+
+    updated = await update_billing_settings(db, body.model_dump(exclude_unset=True))
+    set_grace_days_cache(updated["grace_days"])
+    await db.commit()
+    return BillingSettingsOut(**updated)
+

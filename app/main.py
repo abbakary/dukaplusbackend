@@ -39,6 +39,17 @@ async def lifespan(app: FastAPI):
     if settings.seed_demo_data:
         await seed_provider_data()
     await seed_platform_showcase()
+    try:
+        from app.database import AsyncSessionLocal
+        from app.services.platform_billing import ensure_billing_settings, get_grace_days
+        from app.core.subscription import set_grace_days_cache
+
+        async with AsyncSessionLocal() as session:
+            await ensure_billing_settings(session)
+            set_grace_days_cache(await get_grace_days(session))
+            await session.commit()
+    except Exception:
+        logger.exception("Billing settings seed failed")
     yield
 
 

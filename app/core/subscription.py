@@ -4,8 +4,21 @@ from datetime import UTC, datetime, timedelta
 
 from app.models import Tenant, TenantStatus
 
-GRACE_DAYS = 7
+# Default when platform settings unavailable; provider can override via billing settings.
+DEFAULT_GRACE_DAYS = 0
 DEMO_TENANT_EMAIL_MARKER = "sample.dukaplus.co.tz"
+
+# Mutable cache refreshed from DB on sync (avoids async in every check)
+_GRACE_DAYS_CACHE = DEFAULT_GRACE_DAYS
+
+
+def set_grace_days_cache(days: int) -> None:
+    global _GRACE_DAYS_CACHE
+    _GRACE_DAYS_CACHE = max(0, int(days))
+
+
+def grace_days() -> int:
+    return _GRACE_DAYS_CACHE
 
 
 def _is_demo_tenant(tenant: Tenant) -> bool:
@@ -36,7 +49,15 @@ async def sync_tenant_subscription_state(tenant: Tenant, db) -> None:
     if tenant.status == TenantStatus.pending_kyc:
         return
 
+    try:
+        from app.services.platform_billing import get_grace_days
+
+        set_grace_days_cache(await get_grace_days(db))
+    except Exception:
+        pass
+
     now = datetime.now(UTC)
+    grace = grace_days()
 
     # Demo/sample tenants stay active for trials and Vercel demos
     if _is_demo_tenant(tenant):
@@ -58,7 +79,7 @@ async def sync_tenant_subscription_state(tenant: Tenant, db) -> None:
             tenant.status = TenantStatus.active
         return
 
-    if past <= GRACE_DAYS:
+    if grace > 0 and past <= grace:
         if tenant.status == TenantStatus.active:
             tenant.status = TenantStatus.grace_period
         return
@@ -74,17 +95,18 @@ def subscription_allows_api_access(tenant: Tenant) -> bool:
     if tenant.status == TenantStatus.pending_kyc:
         return True
     past = days_past_expiry(tenant)
-    if past is not None and past > GRACE_DAYS:
+    if past is not None and past > grace_days():
         return False
     return True
 
 
 def subscription_status_message(tenant: Tenant) -> str:
     if tenant.status == TenantStatus.suspended:
-        return "Account suspended — renew subscription to restore access."
+        return "Account suspended — renew subscription to restore access. Contact WhatsApp for payment help."
     past = days_past_expiry(tenant)
-    if past is not None and past > GRACE_DAYS:
-        return "Subscription expired — payment required."
-    if tenant.status == TenantStatus.grace_period:
-        return f"Grace period — {max(0, GRACE_DAYS - past)} day(s) remaining."
+    g = grace_days()
+    if past is not None and past > g:
+        return "Free trial / subscription expired — upgrade to a paid package to continue."
+    if tenant.status == TenantStatus.grace_period and past is not None:
+        return f"Grace period — {max(0, g - past)} day(s) remaining. Please upgrade."
     return "Active"

@@ -446,6 +446,27 @@ class PlatformBroadcast(Base):
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class PlatformBillingSettings(Base):
+    """Singleton provider billing config — trial days, Lipa & WhatsApp contact."""
+    __tablename__ = "platform_billing_settings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default="default")
+    trial_days: Mapped[int] = mapped_column(Integer, default=14)
+    grace_days: Mapped[int] = mapped_column(Integer, default=0)
+    lipa_number: Mapped[str] = mapped_column(String(40), default="0650124656")
+    lipa_name: Mapped[str] = mapped_column(String(100), default="DUKAPLUS")
+    whatsapp_number: Mapped[str] = mapped_column(String(40), default="0650124656")
+    support_note_en: Mapped[str] = mapped_column(
+        Text,
+        default="After payment, send your business name + M-Pesa reference on WhatsApp for activation.",
+    )
+    support_note_sw: Mapped[str] = mapped_column(
+        Text,
+        default="Baada ya malipo, tuma jina la biashara + kumbukumbu ya M-Pesa kwenye WhatsApp ili kuamilisha.",
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class TenantSettings(Base):
     """Per-tenant document templates, branding, and business settings JSON."""
     __tablename__ = "tenant_settings"

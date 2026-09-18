@@ -48,6 +48,10 @@ async def create_tenant_with_owner(
     except (ValueError, AttributeError):
         selected_plan = plan
 
+    from app.services.platform_billing import get_trial_days
+
+    trial_days = await get_trial_days(db)
+
     tenant = Tenant(
         name=body.business_name,
         owner_name=body.owner_name,
@@ -60,7 +64,7 @@ async def create_tenant_with_owner(
         license_number=body.license_number,
         plan=selected_plan,
         status=tenant_status,
-        subscription_expiry=datetime.now(UTC) + timedelta(days=30),
+        subscription_expiry=datetime.now(UTC) + timedelta(days=trial_days),
     )
     db.add(tenant)
     await db.flush()
