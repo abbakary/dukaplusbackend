@@ -475,3 +475,13 @@ class TenantSettings(Base):
     document_config: Mapped[dict] = mapped_column(JSON, default=dict)
     business_settings: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+from app.models.tra_efd import FiscalReceiptRecord, TenantTraEfdConfig  # noqa: E402,F401
+from app.models.accounting import (  # noqa: E402,F401
+    HrPayrollContract,
+    HrPayslip,
+    JournalEntry,
+    JournalLine,
+    LedgerAccount,
+)

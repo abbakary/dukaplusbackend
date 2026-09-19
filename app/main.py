@@ -6,7 +6,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from app.api.v1 import admin, ai, analytics, auth, billing, business, documents, extended, platform, tenant, tenant_settings, workplace
+from app.api.v1 import (
+    accounting,
+    admin,
+    ai,
+    analytics,
+    auth,
+    billing,
+    business,
+    documents,
+    extended,
+    payroll,
+    platform,
+    tenant,
+    tenant_settings,
+    tra_efd,
+    workplace,
+)
 from app.config import settings
 from app.database import init_db
 from app.health import check_database, get_system_status
@@ -78,6 +94,9 @@ app.include_router(platform.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(tenant_settings.router, prefix="/api/v1")
+app.include_router(tra_efd.router, prefix="/api/v1")
+app.include_router(accounting.router, prefix="/api/v1")
+app.include_router(payroll.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(workplace.router, prefix="/api/v1")
 app.include_router(ai.router, prefix="/api/ai")
