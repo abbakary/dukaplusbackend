@@ -116,7 +116,28 @@ class StaffOut(BaseModel):
     permissions: dict
     branch_id: str | None = None
     branch_name: str | None = None
+    avatar_url: str | None = None
     model_config = {"from_attributes": True}
+
+
+def _staff_out_row(
+    s: StaffMember,
+    branch_names: dict[str, str],
+) -> StaffOut:
+    perms = s.permissions or {}
+    avatar = perms.get("avatar_url") if isinstance(perms.get("avatar_url"), str) else None
+    return StaffOut(
+        id=s.id,
+        name=s.name,
+        email=s.email,
+        phone=s.phone,
+        role=s.role.value if hasattr(s.role, "value") else str(s.role),
+        active=s.active,
+        permissions=perms,
+        branch_id=s.branch_id,
+        branch_name=branch_names.get(s.branch_id) if s.branch_id else None,
+        avatar_url=avatar,
+    )
 
 
 class StaffCreate(BaseModel):
@@ -531,16 +552,7 @@ async def list_staff(user: Annotated[User, Depends(get_current_user)], db: Annot
     if branch_ids:
         br = await db.execute(select(Branch).where(Branch.id.in_(branch_ids)))
         branch_names = {b.id: b.name for b in br.scalars().all()}
-    return [
-        StaffOut(
-            id=s.id, name=s.name, email=s.email, phone=s.phone,
-            role=s.role.value if hasattr(s.role, "value") else str(s.role),
-            active=s.active, permissions=s.permissions or {},
-            branch_id=s.branch_id,
-            branch_name=branch_names.get(s.branch_id) if s.branch_id else None,
-        )
-        for s in rows
-    ]
+    return [_staff_out_row(s, branch_names) for s in rows]
 
 
 @router.post("/staff", response_model=StaffOut, status_code=status.HTTP_201_CREATED)
@@ -578,10 +590,7 @@ async def create_staff(
         tenant_id=tid, staff_id=staff.id,
     ))
     await db.flush()
-    return StaffOut(
-        id=staff.id, name=staff.name, email=staff.email, phone=staff.phone,
-        role=role.value, active=staff.active, permissions=staff.permissions,
-    )
+    return _staff_out_row(staff, {})
 
 
 @router.patch("/staff/{staff_id}", response_model=StaffOut)
@@ -604,10 +613,13 @@ async def update_staff(
     for k, v in data.items():
         setattr(staff, k, v)
     await db.flush()
-    return StaffOut(
-        id=staff.id, name=staff.name, email=staff.email, phone=staff.phone,
-        role=staff.role.value, active=staff.active, permissions=staff.permissions,
-    )
+    branch_names: dict[str, str] = {}
+    if staff.branch_id:
+        br = await db.execute(select(Branch).where(Branch.id == staff.branch_id))
+        b = br.scalar_one_or_none()
+        if b:
+            branch_names[b.id] = b.name
+    return _staff_out_row(staff, branch_names)
 
 
 @router.post("/staff/me/claim-stipend", response_model=StipendClaimResponse)

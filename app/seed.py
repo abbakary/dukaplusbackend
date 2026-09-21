@@ -94,3 +94,15 @@ async def seed_demo_data() -> None:
     if settings.seed_demo_data:
         await seed_sample_data()
         await seed_login_aliases()
+        try:
+            from app.seed_compliance_sample import seed_compliance_demo_for_sinza
+
+            await seed_compliance_demo_for_sinza()
+        except Exception:
+            logger.exception("Compliance demo seed failed")
+        try:
+            from app.seed_sample_enrichment import enrich_sample_tenants
+
+            await enrich_sample_tenants()
+        except Exception:
+            logger.exception("Sample tenant enrichment failed")

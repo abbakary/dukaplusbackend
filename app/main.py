@@ -14,6 +14,7 @@ from app.api.v1 import (
     auth,
     billing,
     business,
+    demo,
     documents,
     extended,
     payroll,
@@ -89,6 +90,7 @@ app.include_router(auth.router, prefix="/api/v1")
 app.include_router(business.router, prefix="/api/v1")
 app.include_router(analytics.router, prefix="/api/v1")
 app.include_router(tenant.router, prefix="/api/v1")
+app.include_router(demo.router, prefix="/api/v1")
 app.include_router(extended.router, prefix="/api/v1")
 app.include_router(platform.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")

@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 
 from app.core.security import DEFAULT_PERMISSIONS, hash_password
+from app.demo_media import product_image_url, staff_avatar_url
 from app.database import AsyncSessionLocal
 from app.models import (
     Branch,
@@ -329,6 +330,8 @@ async def seed_sample_data() -> None:
             db.add(branch)
             await db.flush()
 
+            owner_perms = dict(DEFAULT_PERMISSIONS["Owner"])
+            owner_perms["avatar_url"] = staff_avatar_url(owner_email)
             owner_staff = StaffMember(
                 tenant_id=tenant.id,
                 branch_id=branch.id,
@@ -336,7 +339,7 @@ async def seed_sample_data() -> None:
                 email=owner_email,
                 phone=_phone(10000000 + idx),
                 role=StaffRole.owner,
-                permissions=DEFAULT_PERMISSIONS["Owner"],
+                permissions=owner_perms,
             )
             db.add(owner_staff)
             await db.flush()
@@ -363,6 +366,8 @@ async def seed_sample_data() -> None:
             for sidx, staff_role in enumerate(staff_roles_to_add[:3]):
                 role_key = staff_role.value
                 staff_email = _email(f"{role_key.lower().replace(' ', '')}.{slug}")
+                staff_perms = dict(DEFAULT_PERMISSIONS.get(role_key, DEFAULT_PERMISSIONS["Cashier"]))
+                staff_perms["avatar_url"] = staff_avatar_url(staff_email)
                 staff_member = StaffMember(
                     tenant_id=tenant.id,
                     branch_id=branch.id,
@@ -370,7 +375,7 @@ async def seed_sample_data() -> None:
                     email=staff_email,
                     phone=_phone(30000000 + idx * 10 + sidx),
                     role=staff_role,
-                    permissions=DEFAULT_PERMISSIONS.get(role_key, DEFAULT_PERMISSIONS["Cashier"]),
+                    permissions=staff_perms,
                 )
                 db.add(staff_member)
                 await db.flush()
@@ -410,6 +415,10 @@ async def seed_sample_data() -> None:
                     unit=unit,
                     business_type=biz_type,
                     requires_prescription=biz_type == BusinessType.pharmacy and pidx % len(catalog) == 1,
+                    metadata_json={
+                        "image_url": product_image_url(biz_type, sku, pidx),
+                        "supplier_name": SUPPLIER_NAMES[idx % len(SUPPLIER_NAMES)],
+                    },
                 )
                 db.add(product)
                 products.append(product)
