@@ -240,6 +240,15 @@ async def create_sale_transaction(
     )
     db.add(sale)
     await db.flush()
+    if should_finalize and status in COMPLETED_STATUSES:
+        from app.services.accounting_posting import post_sale_journal
+
+        await post_sale_journal(
+            db,
+            tenant_id=tenant_id,
+            sale=sale,
+            include_vat=float(totals["vat_amount"] or 0) > 0,
+        )
     return sale
 
 
@@ -313,4 +322,13 @@ async def finalize_sale_transaction(
     if not sale.tra_efd_signature:
         sale.tra_efd_signature = f"TRA-EFD-{secrets.token_hex(8).upper()}"
     await db.flush()
+    if sale.status in COMPLETED_STATUSES:
+        from app.services.accounting_posting import post_sale_journal
+
+        await post_sale_journal(
+            db,
+            tenant_id=tenant_id,
+            sale=sale,
+            include_vat=float(sale.vat_amount or 0) > 0,
+        )
     return sale

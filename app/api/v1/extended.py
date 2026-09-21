@@ -713,6 +713,19 @@ async def create_expense(
     exp = Expense(tenant_id=tid, **body.model_dump())
     db.add(exp)
     await db.flush()
+    if (exp.status or "paid") != "pending":
+        from app.services.accounting_posting import post_expense_journal
+
+        exp_day = exp.expense_date.date() if exp.expense_date else None
+        await post_expense_journal(
+            db,
+            tenant_id=tid,
+            expense_id=exp.id,
+            amount=float(exp.amount or 0),
+            title=exp.title,
+            category=exp.category,
+            expense_date=exp_day,
+        )
     return exp
 
 
@@ -728,6 +741,19 @@ async def update_expense(
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(exp, k, v)
     await db.flush()
+    if (exp.status or "paid") != "pending":
+        from app.services.accounting_posting import post_expense_journal
+
+        exp_day = exp.expense_date.date() if exp.expense_date else None
+        await post_expense_journal(
+            db,
+            tenant_id=tid,
+            expense_id=exp.id,
+            amount=float(exp.amount or 0),
+            title=exp.title,
+            category=exp.category,
+            expense_date=exp_day,
+        )
     return exp
 
 

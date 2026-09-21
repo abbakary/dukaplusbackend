@@ -5,11 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.branch_scope import resolve_branch_filter
 from app.core.deps import get_current_user, require_tenant, require_vendor_subscription
 from app.database import get_db
-from app.models import User
+from app.models import Sale, User
 from app.models.accounting import JournalEntry, JournalLine, LedgerAccount
 from app.services.accounting_defaults import ensure_default_chart
+from app.services.accounting_posting import COMPLETED_SALE_STATUSES, post_sale_journal
+from app.services.accounting_reports import build_report_bundle
 
 router = APIRouter(prefix="/tenant/accounting", tags=["accounting"], dependencies=[Depends(require_vendor_subscription)])
 
@@ -176,3 +179,57 @@ async def trial_balance(
             }
         )
     return {"as_of": date.today().isoformat(), "rows": rows}
+
+
+@router.get("/reports/bundle")
+async def accounting_reports_bundle(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    books_mode: str = Query("standard", pattern="^(standard|tra)$"),
+    branch_id: str | None = Query(None),
+):
+    tenant_id = require_tenant(user)
+    effective_branch = resolve_branch_filter(user, branch_id)
+    return await build_report_bundle(
+        db,
+        tenant_id=tenant_id,
+        branch_id=effective_branch,
+        books_mode=books_mode,
+    )
+
+
+@router.post("/sync-from-operations")
+async def sync_accounting_from_operations(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    branch_id: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """Backfill journal entries from completed POS sales not yet posted."""
+    tenant_id = require_tenant(user)
+    effective_branch = resolve_branch_filter(user, branch_id)
+    q = select(Sale).where(Sale.tenant_id == tenant_id, Sale.status.in_(tuple(COMPLETED_SALE_STATUSES)))
+    if effective_branch:
+        q = q.where(Sale.branch_id == effective_branch)
+    q = q.order_by(Sale.created_at.desc()).limit(limit)
+    sales = (await db.execute(q)).scalars().all()
+    posted = 0
+    for sale in sales:
+        before = await db.execute(
+            select(JournalEntry.id).where(
+                JournalEntry.tenant_id == tenant_id,
+                JournalEntry.source == "pos_sale",
+                JournalEntry.source_id == sale.id,
+            )
+        )
+        if before.scalar_one_or_none():
+            continue
+        await post_sale_journal(
+            db,
+            tenant_id=tenant_id,
+            sale=sale,
+            include_vat=float(sale.vat_amount or 0) > 0,
+        )
+        posted += 1
+    await db.flush()
+    return {"posted": posted, "scanned": len(sales)}

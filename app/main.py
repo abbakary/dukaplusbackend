@@ -17,6 +17,7 @@ from app.api.v1 import (
     demo,
     documents,
     extended,
+    hr,
     payroll,
     platform,
     tenant,
@@ -98,6 +99,7 @@ app.include_router(admin.router, prefix="/api/v1")
 app.include_router(tenant_settings.router, prefix="/api/v1")
 app.include_router(tra_efd.router, prefix="/api/v1")
 app.include_router(accounting.router, prefix="/api/v1")
+app.include_router(hr.router, prefix="/api/v1")
 app.include_router(payroll.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(workplace.router, prefix="/api/v1")
