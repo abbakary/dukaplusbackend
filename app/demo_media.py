@@ -1,8 +1,9 @@
-"""Stable Unsplash URLs for demo product and staff imagery (no API key required)."""
+"""Demo product and staff imagery — Unsplash + AI (Pollinations) for rich hardware demos."""
 
 from __future__ import annotations
 
 import hashlib
+from urllib.parse import quote
 
 from app.models import BusinessType
 
@@ -81,7 +82,27 @@ def _pick(pool: list[str], key: str) -> str:
     return _UNSPLASH.format(photo_id=pool[idx])
 
 
-def product_image_url(business_type: BusinessType, product_key: str, variant: int = 0) -> str:
+def ai_product_image_url(product_name: str, sku: str, variant: int = 0) -> str:
+    """AI-style catalog photo via Pollinations (no API key). Stable per SKU."""
+    label = (product_name or "hardware item").split("—")[0].split(" - ")[0].strip()[:120]
+    prompt = (
+        f"Professional e-commerce product photo of {label}, building materials hardware store, "
+        "centered, clean white background, studio lighting, sharp detail, commercial catalog"
+    )
+    seed = int(hashlib.sha256(f"{sku}:{variant}".encode()).hexdigest()[:8], 16) % 999_999
+    return f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=512&height=512&seed={seed}&nologo=true"
+
+
+def product_image_url(
+    business_type: BusinessType,
+    product_key: str,
+    variant: int = 0,
+    *,
+    product_name: str | None = None,
+    use_ai: bool = False,
+) -> str:
+    if use_ai and product_name:
+        return ai_product_image_url(product_name, product_key, variant)
     pool = _PRODUCT_PHOTOS.get(business_type) or _DEFAULT_PRODUCT_PHOTOS
     key = f"{business_type.value}:{product_key}:{variant}"
     return _pick(pool, key)

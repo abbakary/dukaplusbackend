@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 from sqlalchemy import func, select
 
-from app.demo_media import product_image_url, staff_avatar_url
+from app.demo_media import ai_product_image_url, product_image_url, staff_avatar_url
 from app.database import AsyncSessionLocal
 from app.models import Branch, Product, StaffMember, Tenant
 from app.models.accounting import JournalEntry, JournalLine
@@ -38,9 +38,18 @@ async def enrich_sample_tenants() -> dict[str, int]:
             for pidx, product in enumerate(prod_rows):
                 meta = dict(product.metadata_json or {})
                 if not meta.get("image_url") and not meta.get("imageUrl"):
-                    meta["image_url"] = product_image_url(
-                        biz_type, product.sku or product.id, pidx,
-                    )
+                    use_ai = "jengo-mega-hardware" in (tenant.owner_email or "")
+                    if use_ai:
+                        meta["image_url"] = ai_product_image_url(
+                            product.name or "hardware item",
+                            product.sku or product.id,
+                            pidx,
+                        )
+                        meta["image_source"] = "ai_pollinations"
+                    else:
+                        meta["image_url"] = product_image_url(
+                            biz_type, product.sku or product.id, pidx,
+                        )
                     product.metadata_json = meta
                     stats["products"] += 1
 

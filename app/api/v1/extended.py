@@ -155,6 +155,7 @@ class StaffUpdate(BaseModel):
     role: str | None = None
     active: bool | None = None
     permissions: dict | None = None
+    avatar_url: str | None = None
 
 
 class StipendClaimRequest(BaseModel):
@@ -603,13 +604,31 @@ async def update_staff(
     tid = require_tenant(user)
     staff = await _tenant_entity(db, StaffMember, staff_id, tid)
     data = body.model_dump(exclude_unset=True)
+    if "avatar_url" in data:
+        avatar_val = data.pop("avatar_url")
+        perms = dict(staff.permissions or {})
+        if avatar_val is None or avatar_val == "":
+            perms.pop("avatar_url", None)
+        else:
+            perms["avatar_url"] = avatar_val
+        staff.permissions = perms
     if "role" in data:
         try:
             staff.role = StaffRole(data.pop("role"))
             if body.permissions is None:
-                staff.permissions = DEFAULT_PERMISSIONS.get(staff.role.value, DEFAULT_PERMISSIONS["Cashier"])
+                merged = dict(DEFAULT_PERMISSIONS.get(staff.role.value, DEFAULT_PERMISSIONS["Cashier"]))
+                existing_avatar = (staff.permissions or {}).get("avatar_url")
+                if existing_avatar:
+                    merged["avatar_url"] = existing_avatar
+                staff.permissions = merged
         except ValueError as e:
             raise HTTPException(status_code=400, detail="Invalid role") from e
+    if "permissions" in data and data["permissions"] is not None:
+        merged = dict(data.pop("permissions"))
+        existing_avatar = (staff.permissions or {}).get("avatar_url")
+        if existing_avatar and "avatar_url" not in merged:
+            merged["avatar_url"] = existing_avatar
+        staff.permissions = merged
     for k, v in data.items():
         setattr(staff, k, v)
     await db.flush()

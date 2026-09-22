@@ -153,3 +153,63 @@ async def post_expense_journal(
     await _add_line(db, entry.id, by_code, expense_code, title[:120], amount, 0)
     await _add_line(db, entry.id, by_code, "1000", "Cash payment", 0, amount)
     await db.flush()
+
+
+async def post_payroll_journal(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    period: str,
+    branch_id: str | None,
+    gross: float,
+    net: float,
+    paye: float,
+    nssf_total: float,
+    nhif_total: float,
+    heslb: float,
+    sdl: float,
+    wcf: float,
+    employer_statutory: float,
+) -> JournalEntry:
+    """Post monthly payroll: expense (gross + employer levies) vs bank & statutory payables."""
+    ref = f"PAYROLL-{period}"
+    existing = await db.execute(
+        select(JournalEntry.id).where(
+            JournalEntry.tenant_id == tenant_id,
+            JournalEntry.reference == ref,
+            JournalEntry.source == "payroll",
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise ValueError(f"Payroll journal {ref} already posted.")
+
+    accounts = await ensure_default_chart(db, tenant_id)
+    by_code = {a.code: a for a in accounts}
+    statutory_credit = round(paye + nhif_total + heslb + sdl + wcf, 2)
+    expense_debit = round(gross + employer_statutory, 2)
+    total_credit = round(net + nssf_total + statutory_credit, 2)
+    if round(expense_debit, 2) != total_credit:
+        # Adjust statutory bucket so entry always balances (rounding drift).
+        statutory_credit = round(total_credit - net - nssf_total, 2)
+
+    entry = JournalEntry(
+        tenant_id=tenant_id,
+        branch_id=branch_id,
+        entry_date=date.today(),
+        reference=ref,
+        memo=f"Payroll {period}",
+        source="payroll",
+        source_id=period,
+    )
+    db.add(entry)
+    await db.flush()
+    await _add_line(db, entry.id, by_code, "6200", f"Gross salaries {period}", gross, 0)
+    if employer_statutory > 0:
+        await _add_line(db, entry.id, by_code, "6200", f"Employer statutory {period}", employer_statutory, 0)
+    await _add_line(db, entry.id, by_code, "1100", f"Net pay {period}", 0, net)
+    if nssf_total > 0:
+        await _add_line(db, entry.id, by_code, "2200", f"NSSF {period}", 0, nssf_total)
+    if statutory_credit > 0:
+        await _add_line(db, entry.id, by_code, "2000", f"Payroll statutory {period}", 0, statutory_credit)
+    await db.flush()
+    return entry

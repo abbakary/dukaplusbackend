@@ -106,3 +106,9 @@ async def seed_demo_data() -> None:
             await enrich_sample_tenants()
         except Exception:
             logger.exception("Sample tenant enrichment failed")
+        try:
+            from app.seed_mega_hardware import ensure_mega_hardware_demo
+
+            await ensure_mega_hardware_demo()
+        except Exception:
+            logger.exception("Mega hardware demo seed failed")

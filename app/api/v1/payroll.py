@@ -10,6 +10,7 @@ from app.core.deps import get_current_user, require_tenant, require_vendor_subsc
 from app.database import get_db
 from app.models import User
 from app.models.accounting import HrPayrollContract, HrPayslip
+from app.services.accounting_posting import post_payroll_journal
 
 router = APIRouter(prefix="/tenant/payroll", tags=["payroll"], dependencies=[Depends(require_vendor_subscription)])
 
@@ -27,6 +28,20 @@ class ContractUpsert(BaseModel):
 class PayslipRunRequest(BaseModel):
     period: str = Field(..., pattern=r"^\d{4}-\d{2}$")
     staff: list[dict] = Field(default_factory=list)
+
+
+class PayrollAccountingPost(BaseModel):
+    period: str = Field(..., pattern=r"^\d{4}-\d{2}$")
+    branch_id: str | None = None
+    gross: float = 0
+    net: float = 0
+    paye: float = 0
+    nssf_total: float = 0
+    nhif_total: float = 0
+    heslb: float = 0
+    sdl: float = 0
+    wcf: float = 0
+    employer_statutory: float = 0
 
 
 @router.get("/contracts")
@@ -141,3 +156,34 @@ async def run_payslips(
         created.append(staff_id)
     await db.flush()
     return {"period": body.period, "created_count": len(created), "staff_ids": created}
+
+
+@router.post("/post-to-accounting")
+async def post_payroll_to_accounting(
+    body: PayrollAccountingPost,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    tenant_id = require_tenant(user)
+    if body.gross <= 0 or body.net < 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payroll totals.")
+    try:
+        entry = await post_payroll_journal(
+            db,
+            tenant_id=tenant_id,
+            period=body.period,
+            branch_id=body.branch_id,
+            gross=body.gross,
+            net=body.net,
+            paye=body.paye,
+            nssf_total=body.nssf_total,
+            nhif_total=body.nhif_total,
+            heslb=body.heslb,
+            sdl=body.sdl,
+            wcf=body.wcf,
+            employer_statutory=body.employer_statutory,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await db.flush()
+    return {"id": entry.id, "reference": entry.reference}
