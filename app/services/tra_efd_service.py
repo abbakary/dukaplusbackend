@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import secrets
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -272,12 +275,65 @@ async def test_tra_connection(config: TenantTraEfdConfig) -> tuple[bool, str]:
         return False, str(exc)
 
 
+def compute_sale_fiscal_totals(sale: dict[str, Any], vat_rate: float) -> tuple[float, float, float]:
+    """Totals aligned with VAT-inclusive POS pricing (matches webapp sale fields)."""
+    total_incl = float(sale.get("total") or 0)
+    vat = float(sale.get("vat_amount") or sale.get("vatAmount") or 0)
+    excl = float(sale.get("subtotal") or 0)
+    if vat <= 0 and total_incl > 0 and vat_rate > 0:
+        vat = round(total_incl * vat_rate / (1 + vat_rate), 2)
+    if excl <= 0 and total_incl > 0:
+        excl = round(total_incl - vat, 2)
+    if total_incl <= 0 and excl > 0:
+        total_incl = round(excl + vat, 2)
+    return excl, vat, total_incl
+
+
+def _demo_receipt_number(config: TenantTraEfdConfig, invoice_ref: str) -> str:
+    serial = (config.company_serial or "DEMO").strip()
+    token = serial.split("-")[-1] if "-" in serial else serial
+    token = "".join(ch for ch in token if ch.isalnum())[:12] or "DEMO"
+    tail = "".join(ch for ch in invoice_ref if ch.isalnum())[-8:] or secrets.token_hex(3).upper()
+    return f"TRA-{token}-{tail}"
+
+
+def build_demo_tra_receipt_parsed(
+    config: TenantTraEfdConfig,
+    sale: dict[str, Any],
+    vat_rate: float,
+) -> dict[str, Any]:
+    invoice_ref = str(sale.get("receipt_number") or sale.get("receiptNumber") or sale.get("id") or "")
+    excl, tax, incl = compute_sale_fiscal_totals(sale, vat_rate)
+    receipt_number = _demo_receipt_number(config, invoice_ref)
+    seed = f"{config.tenant_id}:{invoice_ref}:{incl}:{receipt_number}"
+    verification_code = hashlib.sha256(seed.encode()).hexdigest()[:12].upper()
+    vrn = (config.company_vrn or "DEMO-VRN").replace(" ", "")
+    verify_link = f"https://verify.tra.go.tz/?vrn={quote(vrn)}&code={quote(verification_code)}"
+    return parse_tra_receipt_response(
+        {
+            "status": "success",
+            "receipt_number": receipt_number,
+            "verification_code": verification_code,
+            "verify_link": verify_link,
+            "vrn": vrn,
+            "znum": config.company_serial or "",
+            "total_excl_of_tax": excl,
+            "total_tax": tax,
+            "total_incl_of_tax": incl,
+        }
+    )
+
+
 async def post_generatereceipt(
     config: TenantTraEfdConfig,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     base = (config.api_base_url or DEFAULT_API_BASE).rstrip("/")
-    token = await get_bearer_token(config)
+    try:
+        token = await get_bearer_token(config)
+    except Exception as exc:
+        logger.warning("TRA login failed: %s", exc)
+        return {"status": "failed", "message": str(exc)}
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(

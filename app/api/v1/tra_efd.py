@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -12,13 +13,17 @@ from app.models.tra_efd import FiscalReceiptRecord, TenantTraEfdConfig
 from app.services.tra_efd_service import (
     DEFAULT_API_BASE,
     apply_client_secret,
+    build_demo_tra_receipt_parsed,
     build_generatereceipt_payload,
+    compute_sale_fiscal_totals,
     config_to_public_dict,
     fiscal_record_to_dict,
     parse_tra_receipt_response,
     post_generatereceipt,
     test_tra_connection,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tenant", tags=["tra-efd"], dependencies=[Depends(require_vendor_subscription)])
 
@@ -113,11 +118,35 @@ async def tra_efd_generate_receipt(
     if not config.active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="TRA fiscal integration is not enabled.")
 
-    payload = build_generatereceipt_payload(body.model_dump(), config)
-    raw = await post_generatereceipt(config, payload)
-    parsed = parse_tra_receipt_response(raw if isinstance(raw, dict) else {})
-
     sale = body.sale or {}
+    payload = build_generatereceipt_payload(body.model_dump(), config)
+    excl, tax, incl = compute_sale_fiscal_totals(sale, body.vat_rate)
+
+    raw: dict[str, Any] | Any
+    if config.is_demo:
+        parsed = build_demo_tra_receipt_parsed(config, sale, body.vat_rate)
+        raw = {"source": "server_demo_efd", "demo": True, **{k: parsed.get(k) for k in parsed if k != "raw"}}
+    else:
+        try:
+            raw = await post_generatereceipt(config, payload)
+        except Exception as exc:
+            logger.exception("TRA generate-receipt request failed")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"TRA fiscal service error: {exc}",
+            ) from exc
+        parsed = parse_tra_receipt_response(raw if isinstance(raw, dict) else {})
+        if parsed.get("status") != "success" and not parsed.get("verification_code"):
+            err = ""
+            if isinstance(raw, dict):
+                err = str(raw.get("message") or raw.get("MSG") or raw.get("error") or "")
+            return {
+                "ok": False,
+                "status": "failed",
+                "error": err or "TRA did not return a verification code.",
+                "raw": raw,
+            }
+
     customer_name = str(
         (body.customer or {}).get("name") or sale.get("customer_name") or sale.get("customerName") or "Walk-in Customer"
     )
@@ -131,15 +160,17 @@ async def tra_efd_generate_receipt(
         verify_link=parsed.get("verify_link") or "",
         z_number=parsed.get("z_number") or config.company_serial or "",
         vrn=parsed.get("vrn") or config.company_vrn or "",
-        status=parsed.get("status") or "failed",
+        status="demo" if config.is_demo else (parsed.get("status") or "failed"),
         is_demo=config.is_demo,
         customer_name=customer_name,
-        total_excl_tax=float(parsed.get("total_excl_tax") or sale.get("subtotal") or 0),
-        total_tax=float(parsed.get("total_tax") or sale.get("vat_amount") or sale.get("vatAmount") or 0),
-        total_incl_tax=float(parsed.get("total_incl_tax") or sale.get("total") or 0),
+        total_excl_tax=float(parsed.get("total_excl_tax") or excl),
+        total_tax=float(parsed.get("total_tax") or tax),
+        total_incl_tax=float(parsed.get("total_incl_tax") or incl),
         items_json=payload.get("items") or [],
         api_response_raw=str(raw)[:8000],
-        error_message="" if parsed.get("status") == "success" else str(raw.get("message") or raw.get("MSG") or ""),
+        error_message="" if parsed.get("status") == "success" or config.is_demo else str(
+            (raw.get("message") if isinstance(raw, dict) else "") or (raw.get("MSG") if isinstance(raw, dict) else "")
+        ),
     )
     db.add(record)
     await db.flush()
