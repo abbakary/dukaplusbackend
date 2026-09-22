@@ -290,7 +290,8 @@ EXPENSE_TITLES = [
 
 
 def _phone(n: int) -> str:
-    return f"+2557{n:08d}"
+    """+255 + 9-digit national number (TZ mobile)."""
+    return f"+255{n % 1_000_000_000:09d}"
 
 
 def _email(local: str) -> str:
