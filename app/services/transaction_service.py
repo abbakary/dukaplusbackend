@@ -81,8 +81,13 @@ def compute_sale_totals(
 
     paid = round(sum(float(p.amount) for p in payments), 2)
     balance = max(0.0, round(tot - paid, 2))
+    # subtotal in DB/reports = net before VAT (not VAT-inclusive shelf total)
+    if vat_active and prices_include and vat > 0:
+        net_sub = round(sub - vat, 2)
+    else:
+        net_sub = sub
     return {
-        "subtotal": sub,
+        "subtotal": net_sub,
         "vat_amount": vat,
         "total": tot,
         "paid_amount": paid,

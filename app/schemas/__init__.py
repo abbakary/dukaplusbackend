@@ -340,6 +340,7 @@ class CustomerResponse(BaseModel):
     loyalty_tier: str
     loyalty_points: int
     dunning_stage: str
+    notes: str | None = None
     branch_id: str | None = None
     created_at: datetime
 
