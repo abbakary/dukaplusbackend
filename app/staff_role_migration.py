@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.database import engine
+from app.staff_role_types import _LEGACY_DB_TO_CANONICAL
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,22 @@ async def _add_hr_to_pg_enum(conn) -> None:
         logger.info("Added %s to PostgreSQL enum %s", label, _ENUM_NAME)
 
 
+async def _normalize_staff_role_values(conn) -> None:
+    """Map legacy lowercase PG enum labels to Title Case (matches StaffRole.value)."""
+    for legacy, canonical in _LEGACY_DB_TO_CANONICAL.items():
+        await conn.execute(
+            text(
+                """
+                UPDATE staff_members
+                SET role = :canonical
+                WHERE role::text = :legacy OR LOWER(TRIM(role::text)) = :legacy
+                """
+            ),
+            {"legacy": legacy, "canonical": canonical},
+        )
+    logger.info("Normalized staff_members.role values to Title Case where needed")
+
+
 async def _convert_staff_role_to_varchar(conn) -> None:
     udt = await conn.scalar(
         text(
@@ -85,3 +102,4 @@ async def migrate_staff_role_hr_enum() -> None:
     async with engine.begin() as conn:
         await _add_hr_to_pg_enum(conn)
         await _convert_staff_role_to_varchar(conn)
+        await _normalize_staff_role_values(conn)

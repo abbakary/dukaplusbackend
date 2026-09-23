@@ -17,6 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.staff_role_types import StaffRole, StaffRoleType
 
 
 def new_id() -> str:
@@ -45,16 +46,6 @@ class BusinessType(str, enum.Enum):
     furniture = "furniture"
     service = "service"
     mixed = "mixed"
-
-
-class StaffRole(str, enum.Enum):
-    owner = "Owner"
-    manager = "Manager"
-    hr = "HR"
-    pharmacist = "Pharmacist"
-    cashier = "Cashier"
-    storekeeper = "Storekeeper"
-    accountant = "Accountant"
 
 
 class TenantStatus(str, enum.Enum):
@@ -167,10 +158,7 @@ class StaffMember(Base):
     name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str] = mapped_column(String(255))
     phone: Mapped[str] = mapped_column(String(50), default="")
-    role: Mapped[StaffRole] = mapped_column(
-        Enum(StaffRole, values_callable=lambda obj: [e.value for e in obj], native_enum=False, length=32),
-        default=StaffRole.cashier,
-    )
+    role: Mapped[StaffRole] = mapped_column(StaffRoleType(), default=StaffRole.cashier)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     permissions: Mapped[dict] = mapped_column(JSON, default=dict)
     pin_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
