@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models import User
 from app.schemas import AnalyticsSnapshot
 from app.services.analytics_service import build_analytics_snapshot
+from app.services.branch_service import get_tenant_default_branch_id
 from app.services.geo_territory_service import build_geo_territory
 
 router = APIRouter(prefix="/analytics", tags=["analytics"], dependencies=[Depends(require_vendor_subscription)])
@@ -21,16 +22,26 @@ async def analytics_snapshot(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     range: str = Query("month", pattern="^(month|quarter|year|all)$"),
+    branch_id: str | None = Query(None, description="Filter by branch (owner only)"),
 ):
     """Single aggregated BI payload — avoids 4+ full list fetches on mobile/web."""
     tenant_id = require_tenant(user)
-    cache_key = tenant_cache_key(tenant_id, "analytics", range)
+    effective_branch = resolve_branch_filter(user, branch_id)
+    branch_key = effective_branch or "all"
+    cache_key = tenant_cache_key(tenant_id, "analytics", range, branch_key)
 
     cached = await cache_get(cache_key)
     if cached is not None:
         return AnalyticsSnapshot(**{**cached, "cached": True})
 
-    payload = await build_analytics_snapshot(db, tenant_id, range)
+    hq_branch_id = await get_tenant_default_branch_id(db, tenant_id) if effective_branch else None
+    payload = await build_analytics_snapshot(
+        db,
+        tenant_id,
+        range,
+        staff_branch=effective_branch,
+        hq_branch_id=hq_branch_id,
+    )
     await cache_set(cache_key, payload, settings.analytics_cache_ttl_seconds)
     return AnalyticsSnapshot(**payload)
 

@@ -36,6 +36,8 @@ from app.database import get_db
 
 from app.models import Customer, Product, Sale, StockMovement, Supplier, User
 from app.services import product_labels as label_service
+from app.core.business_time import now_local, period_start_local
+from app.services.analytics_service import _FINANCIAL_EXCLUDED_SALE_STATUSES
 
 from app.schemas import (
     CustomerCreate,
@@ -120,16 +122,16 @@ async def dashboard_stats(
 
 
 
-    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = now_local().replace(hour=0, minute=0, second=0, microsecond=0)
 
     hq_branch_id = await get_tenant_default_branch_id(db, tenant_id) if effective_branch else None
 
     staff_branch = effective_branch
 
     sales_today_q = select(func.coalesce(func.sum(Sale.total), 0), func.count(Sale.id)).where(
-
-        Sale.tenant_id == tenant_id, Sale.created_at >= today
-
+        Sale.tenant_id == tenant_id,
+        Sale.created_at >= today,
+        Sale.status.notin_(tuple(_FINANCIAL_EXCLUDED_SALE_STATUSES)),
     )
 
     sales_branch_clause = branch_id_filter(Sale.branch_id, staff_branch, hq_branch_id)
@@ -210,12 +212,12 @@ async def dashboard_stats(
 
     )
 
-    month_start = today.replace(day=1)
+    month_start = period_start_local("month")
 
     monthly_q = select(func.coalesce(func.sum(Sale.total), 0)).where(
-
-        Sale.tenant_id == tenant_id, Sale.created_at >= month_start
-
+        Sale.tenant_id == tenant_id,
+        Sale.created_at >= month_start,
+        Sale.status.notin_(tuple(_FINANCIAL_EXCLUDED_SALE_STATUSES)),
     )
 
     if sales_branch_clause is not None:
@@ -226,7 +228,11 @@ async def dashboard_stats(
 
 
 
-    top_q = select(Sale.items).where(Sale.tenant_id == tenant_id, Sale.created_at >= month_start)
+    top_q = select(Sale.items).where(
+        Sale.tenant_id == tenant_id,
+        Sale.created_at >= month_start,
+        Sale.status.notin_(tuple(_FINANCIAL_EXCLUDED_SALE_STATUSES)),
+    )
 
     if sales_branch_clause is not None:
 
@@ -314,7 +320,13 @@ async def dashboard_stats(
     payload["stock_value"] = float(await db.scalar(stock_val_q) or 0)
 
     try:
-        snapshot = await build_analytics_snapshot(db, tenant_id, "month")
+        snapshot = await build_analytics_snapshot(
+            db,
+            tenant_id,
+            "month",
+            staff_branch=staff_branch,
+            hq_branch_id=hq_branch_id,
+        )
         payload.update({
             "gross_sales": snapshot.get("gross_sales", payload["monthly_revenue"]),
             "cogs": snapshot.get("cogs", 0),

@@ -8,19 +8,13 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.branch_scope import branch_id_filter
+from app.core.business_time import TZ, now_local, period_start_local
 from app.models import Expense, Product, Sale, Supplier
 
-
-def _range_cutoff(range_key: str) -> datetime | None:
-    now = datetime.now(UTC)
-    if range_key == "all":
-        return None
-    if range_key == "year":
-        return datetime(now.year, 1, 1, tzinfo=UTC)
-    if range_key == "quarter":
-        q_month = ((now.month - 1) // 3) * 3 + 1
-        return datetime(now.year, q_month, 1, tzinfo=UTC)
-    return datetime(now.year, now.month, 1, tzinfo=UTC)
+_FINANCIAL_EXCLUDED_SALE_STATUSES = frozenset(
+    {"cancelled", "voided", "refunded", "open", "pending_completion", "requires_attention"},
+)
 
 
 def _month_label(month: int) -> str:
@@ -32,10 +26,19 @@ async def build_analytics_snapshot(
     db: AsyncSession,
     tenant_id: str,
     range_key: str = "month",
+    *,
+    staff_branch: str | None = None,
+    hq_branch_id: str | None = None,
 ) -> dict[str, Any]:
-    cutoff = _range_cutoff(range_key)
+    cutoff = period_start_local(range_key)
 
-    sales_q = select(Sale).where(Sale.tenant_id == tenant_id)
+    sales_q = select(Sale).where(
+        Sale.tenant_id == tenant_id,
+        Sale.status.notin_(tuple(_FINANCIAL_EXCLUDED_SALE_STATUSES)),
+    )
+    branch_clause = branch_id_filter(Sale.branch_id, staff_branch, hq_branch_id)
+    if branch_clause is not None:
+        sales_q = sales_q.where(branch_clause)
     if cutoff:
         sales_q = sales_q.where(Sale.created_at >= cutoff)
     sales_result = await db.execute(sales_q.order_by(Sale.created_at.desc()).limit(5000))
@@ -82,7 +85,9 @@ async def build_analytics_snapshot(
     gross_margin = gross_sales - cogs
     net_profit = gross_margin - total_opex
 
-    mom_change = await _mom_change(db, tenant_id)
+    mom_change = await _mom_change(
+        db, tenant_id, staff_branch=staff_branch, hq_branch_id=hq_branch_id,
+    )
 
     cat_rows = []
     total_cat_profit = sum(category_profit.values()) or 1
@@ -138,23 +143,32 @@ async def build_analytics_snapshot(
     }
 
 
-async def _mom_change(db: AsyncSession, tenant_id: str) -> dict[str, Any]:
-    now = datetime.now(UTC)
-    this_start = datetime(now.year, now.month, 1, tzinfo=UTC)
+async def _mom_change(
+    db: AsyncSession,
+    tenant_id: str,
+    *,
+    staff_branch: str | None = None,
+    hq_branch_id: str | None = None,
+) -> dict[str, Any]:
+    now = now_local()
+    this_start = datetime(now.year, now.month, 1, tzinfo=TZ)
     last_start = (this_start - timedelta(days=1)).replace(day=1)
 
-    this_rev = await db.scalar(
-        select(func.coalesce(func.sum(Sale.total), 0)).where(
-            Sale.tenant_id == tenant_id, Sale.created_at >= this_start
-        )
-    )
-    last_rev = await db.scalar(
-        select(func.coalesce(func.sum(Sale.total), 0)).where(
+    def _rev_q(start: datetime, end: datetime | None = None):
+        q = select(func.coalesce(func.sum(Sale.total), 0)).where(
             Sale.tenant_id == tenant_id,
-            Sale.created_at >= last_start,
-            Sale.created_at < this_start,
+            Sale.created_at >= start,
+            Sale.status.notin_(tuple(_FINANCIAL_EXCLUDED_SALE_STATUSES)),
         )
-    )
+        clause = branch_id_filter(Sale.branch_id, staff_branch, hq_branch_id)
+        if clause is not None:
+            q = q.where(clause)
+        if end is not None:
+            q = q.where(Sale.created_at < end)
+        return q
+
+    this_rev = await db.scalar(_rev_q(this_start))
+    last_rev = await db.scalar(_rev_q(last_start, this_start))
     this_rev = float(this_rev or 0)
     last_rev = float(last_rev or 0)
     if this_rev == 0 and last_rev == 0:
