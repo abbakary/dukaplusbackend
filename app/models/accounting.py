@@ -60,6 +60,7 @@ class HrPayrollContract(Base):
     nssf_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     paye_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    profile_json: Mapped[str] = mapped_column(Text, default="{}")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

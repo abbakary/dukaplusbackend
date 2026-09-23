@@ -124,4 +124,10 @@ DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
         "canOverridePrices": False, "canVoidReceipts": False, "canPerformDailyClosing": True,
         "canAccessSuperAdmin": False,
     },
+    "HR": {
+        "canSellPOS": False, "canGiveCredit": False, "canModifyInventory": False,
+        "canViewProfitReports": True, "canManageSuppliers": False, "canApproveDiscounts": False,
+        "canOverridePrices": False, "canVoidReceipts": False, "canPerformDailyClosing": False,
+        "canAccessSuperAdmin": False,
+    },
 }

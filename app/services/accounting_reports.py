@@ -125,27 +125,77 @@ async def build_report_bundle(
     total_liabilities = payables + vat_payable
     equity = total_assets - total_liabilities + net * 0.5
 
-    aged_receivables = []
-    for c in customers:
-        bal = float(c.balance or 0)
-        if bal <= 0:
-            continue
-        aged_receivables.append(
-            {
-                "name": c.name,
-                "current": bal,
-                "d30": 0,
-                "d60": 0,
-                "d90": 0,
-                "d90plus": 0,
-                "total": bal,
-                "flag": None,
-            }
+    now = datetime.now(UTC)
+    aged_receivables_map: dict[str, dict] = {}
+
+    def _bucket_ar(row: dict, amount: float, days: int) -> None:
+        if days <= 0:
+            row["current"] += amount
+        elif days <= 30:
+            row["d30"] += amount
+        elif days <= 60:
+            row["d60"] += amount
+        elif days <= 90:
+            row["d90"] += amount
+        else:
+            row["d90plus"] += amount
+        row["total"] += amount
+        if days > 60:
+            row["flag"] = "overdue"
+        elif days > 0 and row.get("flag") != "overdue":
+            row["flag"] = "due_soon"
+
+    for sale in sales:
+        owed = float(sale.balance_remaining or 0) or max(
+            0.0, float(sale.total or 0) - float(sale.paid_amount or 0)
         )
-    aged_receivables.sort(key=lambda x: x["total"], reverse=True)
+        if owed <= 0:
+            continue
+        name = (sale.customer_name or "Customer").strip()
+        key = (sale.customer_id or name).lower()
+        row = aged_receivables_map.setdefault(
+            key,
+            {
+                "name": name,
+                "current": 0.0,
+                "d30": 0.0,
+                "d60": 0.0,
+                "d90": 0.0,
+                "d90plus": 0.0,
+                "total": 0.0,
+                "flag": None,
+            },
+        )
+        created = sale.created_at or now
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=UTC)
+        days = (now - created).days
+        _bucket_ar(row, owed, days)
+
+    if not aged_receivables_map:
+        for c in customers:
+            bal = float(c.balance or 0)
+            if bal <= 0:
+                continue
+            key = c.name.strip().lower()
+            row = aged_receivables_map.setdefault(
+                key,
+                {
+                    "name": c.name,
+                    "current": 0.0,
+                    "d30": 0.0,
+                    "d60": 0.0,
+                    "d90": 0.0,
+                    "d90plus": 0.0,
+                    "total": 0.0,
+                    "flag": None,
+                },
+            )
+            _bucket_ar(row, bal, 0)
+
+    aged_receivables = sorted(aged_receivables_map.values(), key=lambda x: x["total"], reverse=True)
 
     aged_payables_map: dict[str, dict] = {}
-    now = datetime.now(UTC)
     for po in purchase_orders:
         owed = max(0, float(po.total_amount or 0) - float(po.paid_amount or 0))
         if owed <= 0:

@@ -50,6 +50,7 @@ class BusinessType(str, enum.Enum):
 class StaffRole(str, enum.Enum):
     owner = "Owner"
     manager = "Manager"
+    hr = "HR"
     pharmacist = "Pharmacist"
     cashier = "Cashier"
     storekeeper = "Storekeeper"

@@ -532,16 +532,32 @@ async def _seed_compliance_extras(
 
     period = date.today().strftime("%Y-%m")
     for sm in staff_members[:8]:
+        wage = 950_000 if sm.role == StaffRole.owner else rng_wage(sm.role)
+        profile = {
+            "baseSalary": wage,
+            "housingAllowanceMonthly": round(wage * 0.12),
+            "transportAllowanceMonthly": 66_000 if sm.role == StaffRole.owner else round(wage * 0.1),
+            "tin": "109-442-671" if sm.role == StaffRole.owner else "109-xxx-000",
+            "nssfNumber": f"TZ-NSSF-{sm.id.replace('-', '')[:8]}",
+            "bankName": "CRDB Bank",
+            "bankBranch": "Kariakoo",
+            "bankAccount": "0150 2217634 01" if sm.role == StaffRole.owner else "",
+            "department": "Management" if sm.role == StaffRole.owner else "Operations",
+            "jobTitle": sm.role.value,
+            "contractType": "Permanent",
+            "heslb": False,
+        }
         db.add(
             HrPayrollContract(
                 tenant_id=tenant_id,
                 staff_id=sm.id,
                 staff_name=sm.name,
-                wage_monthly=950_000 if sm.role == StaffRole.owner else rng_wage(sm.role),
+                wage_monthly=wage,
                 structure_code="standard",
                 nssf_enabled=True,
                 paye_enabled=True,
                 active=True,
+                profile_json=json.dumps(profile),
             )
         )
         gross = 950_000 if sm.role == StaffRole.owner else rng_wage(sm.role)
