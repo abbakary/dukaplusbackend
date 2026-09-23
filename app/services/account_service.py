@@ -124,4 +124,8 @@ async def create_tenant_with_owner(
     )
     user = result.scalar_one()
 
+    from app.seed_tenant_starter_pack import seed_tenant_starter_pack
+
+    await seed_tenant_starter_pack(db, tenant=tenant, branch_id=branch.id, owner_name=body.owner_name)
+
     return tenant, user
