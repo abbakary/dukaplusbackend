@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.core.security import decode_token
 from app.core.subscription import subscription_allows_api_access, subscription_status_message, sync_tenant_subscription_state
 from app.database import get_db
-from app.models import StaffMember, User, UserRole
+from app.models import StaffMember, StaffRole, User, UserRole
 
 security = HTTPBearer(auto_error=False)
 
@@ -111,4 +111,27 @@ def require_permission(permission: str):
         if not perms.get(permission, False):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Missing permission: {permission}")
         return user
+    return checker
+
+
+def require_staff_management():
+    """Owner, Manager, HR, or users with profit/admin staff permissions."""
+
+    async def checker(user: Annotated[User, Depends(get_current_user)]) -> User:
+        if user.role == UserRole.vendor_owner:
+            return user
+        if user.staff and user.staff.role in (
+            StaffRole.owner,
+            StaffRole.manager,
+            StaffRole.hr,
+        ):
+            return user
+        perms = get_user_permissions(user)
+        if perms.get("canViewProfitReports", False):
+            return user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing permission: canManageStaff",
+        )
+
     return checker

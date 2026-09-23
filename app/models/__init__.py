@@ -167,7 +167,10 @@ class StaffMember(Base):
     name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str] = mapped_column(String(255))
     phone: Mapped[str] = mapped_column(String(50), default="")
-    role: Mapped[StaffRole] = mapped_column(Enum(StaffRole), default=StaffRole.cashier)
+    role: Mapped[StaffRole] = mapped_column(
+        Enum(StaffRole, values_callable=lambda obj: [e.value for e in obj], native_enum=False, length=32),
+        default=StaffRole.cashier,
+    )
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     permissions: Mapped[dict] = mapped_column(JSON, default=dict)
     pin_code: Mapped[str | None] = mapped_column(String(10), nullable=True)

@@ -2,12 +2,20 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.branch_scope import get_staff_branch_id, is_tenant_wide_access, resolve_branch_filter
-from app.core.deps import get_current_user, get_user_permissions, require_permission, require_tenant, require_vendor_subscription
+from app.core.deps import (
+    get_current_user,
+    get_user_permissions,
+    require_permission,
+    require_staff_management,
+    require_tenant,
+    require_vendor_subscription,
+)
 from app.core.security import DEFAULT_PERMISSIONS, hash_password
 from app.database import get_db
 from app.models import (
@@ -141,11 +149,11 @@ def _staff_out_row(
 
 
 class StaffCreate(BaseModel):
-    name: str
-    email: str
+    name: str = Field(min_length=1, max_length=255)
+    email: str = Field(min_length=3, max_length=255)
     phone: str = ""
     role: str = "Cashier"
-    password: str
+    password: str = Field(min_length=6, max_length=128)
     branch_id: str | None = None
 
 
@@ -559,17 +567,36 @@ async def list_staff(user: Annotated[User, Depends(get_current_user)], db: Annot
 @router.post("/staff", response_model=StaffOut, status_code=status.HTTP_201_CREATED)
 async def create_staff(
     body: StaffCreate,
-    user: Annotated[User, Depends(require_permission("canViewProfitReports"))],
+    user: Annotated[User, Depends(require_staff_management())],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tid = require_tenant(user)
-    existing = await db.execute(select(User).where(User.email == body.email))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Email already registered")
+    email = body.email.strip().lower()
+    existing = await db.execute(select(User).where(User.email == email))
+    taken = existing.scalar_one_or_none()
+    if taken:
+        if taken.tenant_id == tid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "email_taken",
+                    "message": "Email already registered for this business. Use another email or sign in as that staff member.",
+                },
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "email_taken",
+                "message": "Email already registered on Duka+. Use a different email address.",
+            },
+        )
     try:
         role = StaffRole(body.role)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid role: {body.role}") from e
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role: {body.role}. Valid roles: Cashier, Pharmacist, Storekeeper, Accountant, HR, Manager.",
+        ) from e
     branch_id = body.branch_id
     staff_branch = get_staff_branch_id(user)
     if staff_branch:
@@ -579,18 +606,40 @@ async def create_staff(
         b = br.scalar_one_or_none()
         branch_id = b.id if b else None
     staff = StaffMember(
-        tenant_id=tid, branch_id=branch_id, name=body.name, email=body.email,
-        phone=body.phone, role=role,
+        tenant_id=tid,
+        branch_id=branch_id,
+        name=body.name.strip(),
+        email=email,
+        phone=body.phone.strip(),
+        role=role,
         permissions=DEFAULT_PERMISSIONS.get(role.value, DEFAULT_PERMISSIONS["Cashier"]),
     )
     db.add(staff)
-    await db.flush()
-    db.add(User(
-        email=body.email, hashed_password=hash_password(body.password),
-        name=body.name, phone=body.phone, role=UserRole.vendor_staff,
-        tenant_id=tid, staff_id=staff.id,
-    ))
-    await db.flush()
+    try:
+        await db.flush()
+        db.add(
+            User(
+                email=email,
+                hashed_password=hash_password(body.password),
+                name=body.name.strip(),
+                phone=body.phone.strip(),
+                role=UserRole.vendor_staff,
+                tenant_id=tid,
+                staff_id=staff.id,
+            )
+        )
+        await db.flush()
+    except DBAPIError as exc:
+        err = str(exc.orig if getattr(exc, "orig", None) else exc).lower()
+        if "staffrole" in err or ("invalid input value for enum" in err and "hr" in body.role.lower()):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "hr_role_db_migration",
+                    "message": "HR role is not in the database yet. Redeploy the latest Duka+ backend on Railway (restart service) so startup migration can run, then try again.",
+                },
+            ) from exc
+        raise
     return _staff_out_row(staff, {})
 
 
@@ -598,7 +647,7 @@ async def create_staff(
 async def update_staff(
     staff_id: str,
     body: StaffUpdate,
-    user: Annotated[User, Depends(require_permission("canViewProfitReports"))],
+    user: Annotated[User, Depends(require_staff_management())],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tid = require_tenant(user)
