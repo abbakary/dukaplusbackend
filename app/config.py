@@ -65,8 +65,15 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
     cors_origins: str = (
         "http://localhost:5173,http://localhost:3000,http://localhost:4173,"
+        "http://127.0.0.1:5173,"
         "https://dukaplusapp.vercel.app,https://dukalangu-red.vercel.app,"
-        "https://dukalangu.vercel.app"
+        "https://dukalangu.vercel.app,https://duka-ys3r.vercel.app,"
+        "https://duka-1okz.vercel.app"
+    )
+    # Any *.vercel.app preview/production deploy (Starlette fullmatch).
+    cors_origin_regex: str = (
+        r"^https://[\w.-]+\.vercel\.app$|"
+        r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
     )
     gemini_api_key: str = ""
     environment: str = "development"
