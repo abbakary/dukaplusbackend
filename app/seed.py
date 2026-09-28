@@ -112,3 +112,9 @@ async def seed_demo_data() -> None:
             await ensure_mega_hardware_demo()
         except Exception:
             logger.exception("Mega hardware demo seed failed")
+        try:
+            from app.seed_showcase_retail import ensure_showcase_retail_demo
+
+            await ensure_showcase_retail_demo()
+        except Exception:
+            logger.exception("Showcase retail demo seed failed")

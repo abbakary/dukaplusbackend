@@ -366,6 +366,7 @@ async def seed_demo_data(
         "logins": {
             "super_admin": settings.super_admin_email,
             "short_aliases": [
+                "showcase@sample.dukaplus.co.tz",
                 "pharmacy@sample.dukaplus.co.tz",
                 "retail@sample.dukaplus.co.tz",
                 "restaurant@sample.dukaplus.co.tz",

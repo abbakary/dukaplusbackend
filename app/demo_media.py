@@ -93,6 +93,17 @@ def ai_product_image_url(product_name: str, sku: str, variant: int = 0) -> str:
     return f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=512&height=512&seed={seed}&nologo=true"
 
 
+def ai_retail_product_image_url(product_name: str, sku: str, variant: int = 0) -> str:
+    """AI product photo for retail / supermarket showcase demos."""
+    label = (product_name or "retail product").split("—")[0].split(" - ")[0].strip()[:120]
+    prompt = (
+        f"Professional product photo of {label}, African neighborhood retail shop packaging, "
+        "centered, clean white background, studio lighting, sharp detail, e-commerce catalog"
+    )
+    seed = int(hashlib.sha256(f"retail:{sku}:{variant}".encode()).hexdigest()[:8], 16) % 999_999
+    return f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=512&height=512&seed={seed}&nologo=true"
+
+
 def product_image_url(
     business_type: BusinessType,
     product_key: str,
