@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.core.business_engine import BUSINESS_PROFILES, get_business_profile
 from app.core.deps import get_current_user, require_tenant
 from app.database import get_db
-from app.models import Branch, Tenant, User
+from app.models import Branch, CalendarEvent, Product, Tenant, User
 
 router = APIRouter(prefix="/tenant", tags=["tenant"])
 
@@ -44,6 +44,34 @@ async def tenant_profile(
         "branches_count": len(tenant.branches),
         "workplace": profile,
     }
+
+
+@router.post("/cleanup-demo-catalog")
+async def cleanup_demo_catalog(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Remove onboarding sample SKUs (DEMO-*, starter_pack) — safe for production tenants."""
+    tenant_id = require_tenant(user)
+    prod_rows = await db.execute(select(Product).where(Product.tenant_id == tenant_id))
+    removed_products = 0
+    for product in prod_rows.scalars().all():
+        sku = (product.sku or "").upper()
+        meta = product.metadata_json if isinstance(product.metadata_json, dict) else {}
+        if sku.startswith("DEMO-") or meta.get("starter_pack") or meta.get("showcase"):
+            await db.delete(product)
+            removed_products += 1
+
+    ev_rows = await db.execute(select(CalendarEvent).where(CalendarEvent.tenant_id == tenant_id))
+    removed_events = 0
+    for ev in ev_rows.scalars().all():
+        meta = ev.metadata_json if isinstance(ev.metadata_json, dict) else {}
+        if meta.get("starter_pack"):
+            await db.delete(ev)
+            removed_events += 1
+
+    await db.flush()
+    return {"removed_products": removed_products, "removed_calendar_events": removed_events}
 
 
 @router.get("/business-types")

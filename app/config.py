@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     analytics_cache_ttl_seconds: int = 60
     redis_url: str = ""
     port: int = 8000
-    seed_demo_data: bool = True
+    seed_demo_data: bool = False
     super_admin_email: str = "admin@dukaplus.co.tz"
     super_admin_password: str = "admin123"
     super_admin_name: str = "Platform Admin"

@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models import BusinessType, CalendarEvent, Product, Tenant
 
 
@@ -16,6 +17,9 @@ async def seed_tenant_starter_pack(
     branch_id: str,
     owner_name: str,
 ) -> None:
+    if not settings.seed_demo_data:
+        return
+
     biz = tenant.business_type if tenant.business_type else BusinessType.retail
     today = datetime.now(UTC).date()
 
