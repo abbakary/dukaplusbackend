@@ -241,6 +241,11 @@ class Sale(Base):
     status: Mapped[str] = mapped_column(String(20), default="completed")
     synced: Mapped[bool] = mapped_column(Boolean, default=True)
     client_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    refunded_total: Mapped[float] = mapped_column(Float, default=0)
+    refunds: Mapped[list] = mapped_column(JSON, default=list)
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    refund_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refunded_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

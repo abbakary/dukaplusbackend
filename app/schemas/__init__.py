@@ -286,6 +286,14 @@ class SaleFinalize(BaseModel):
     customer_name: str | None = None
 
 
+class SaleRefundRequest(BaseModel):
+    reason: str
+    kind: str = "full"
+    amount: float | None = None
+    item_quantities: dict[str, float] | None = None
+    restore_stock: bool | None = None
+
+
 class SaleResponse(BaseModel):
     id: str
     receipt_number: str
@@ -302,6 +310,12 @@ class SaleResponse(BaseModel):
     cashier_name: str
     tra_efd_signature: str | None = None
     status: str
+    branch_id: str | None = None
+    refunded_total: float = 0
+    refunds: list[dict[str, Any]] = []
+    refunded_at: datetime | None = None
+    refund_reason: str | None = None
+    refunded_by: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

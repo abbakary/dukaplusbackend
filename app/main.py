@@ -33,6 +33,7 @@ from app.payroll_profile_migration import migrate_payroll_contract_profile_colum
 from app.staff_role_migration import migrate_staff_role_hr_enum
 from app.branch_customer_migration import migrate_customer_branch_column
 from app.branch_operational_migration import migrate_operational_branch_columns
+from app.sale_refund_migration import migrate_sale_refund_columns
 from app.plan_tier_migration import migrate_plan_tier_enum
 from app.seed import seed_demo_data
 from app.seed_plans import seed_platform_plans
@@ -49,6 +50,7 @@ async def lifespan(app: FastAPI):
     await migrate_plan_tier_enum()
     await migrate_customer_branch_column()
     await migrate_operational_branch_columns()
+    await migrate_sale_refund_columns()
     await backfill_branch_ids()
     await migrate_payroll_contract_profile_column()
     await migrate_staff_role_hr_enum()

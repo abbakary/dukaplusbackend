@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.branch_scope import branch_id_filter
 from app.core.business_time import TZ, now_local, period_start_local
 from app.models import Expense, Product, Sale, Supplier
+from app.services.refund_service import sale_net_revenue
 
 _FINANCIAL_EXCLUDED_SALE_STATUSES = frozenset(
     {"cancelled", "voided", "refunded", "open", "pending_completion", "requires_attention"},
@@ -60,7 +61,7 @@ async def build_analytics_snapshot(
     suppliers_result = await db.execute(select(Supplier).where(Supplier.tenant_id == tenant_id))
     suppliers = suppliers_result.scalars().all()
 
-    gross_sales = sum(float(s.total or 0) for s in sales)
+    gross_sales = sum(sale_net_revenue(s) for s in sales)
     cogs = 0.0
     product_qty: dict[str, float] = {}
     product_rev: dict[str, float] = {}
@@ -71,9 +72,13 @@ async def build_analytics_snapshot(
         for item in sale.items or []:
             pid = item.get("product_id") or item.get("productId") or ""
             qty = float(item.get("quantity") or 0)
+            refunded_qty = float(item.get("refunded_quantity") or item.get("refundedQuantity") or 0)
+            net_qty = max(0.0, qty - refunded_qty)
             total = float(item.get("total") or 0)
-            cogs += cost_by_id.get(pid, 0) * qty
-            product_qty[pid] = product_qty.get(pid, 0) + qty
+            if qty > 0 and net_qty < qty:
+                total = total * (net_qty / qty)
+            cogs += cost_by_id.get(pid, 0) * net_qty
+            product_qty[pid] = product_qty.get(pid, 0) + net_qty
             product_rev[pid] = product_rev.get(pid, 0) + total
             prod = product_by_id.get(pid)
             cat = prod.category if prod else "General"

@@ -54,6 +54,7 @@ from app.schemas import (
     ProductUpdate,
     SaleCreate,
     SaleFinalize,
+    SaleRefundRequest,
     SaleResponse,
     StockAdjustment,
     StockMovementResponse,
@@ -64,6 +65,7 @@ from app.schemas import (
 
 from app.services.analytics_service import build_analytics_snapshot
 from app.services.branch_service import get_tenant_default_branch_id
+from app.services.refund_service import apply_sale_refund
 from app.services.transaction_service import create_sale_transaction, finalize_sale_transaction
 
 
@@ -128,7 +130,10 @@ async def dashboard_stats(
 
     staff_branch = effective_branch
 
-    sales_today_q = select(func.coalesce(func.sum(Sale.total), 0), func.count(Sale.id)).where(
+    sales_today_q = select(
+        func.coalesce(func.sum(Sale.total - Sale.refunded_total), 0),
+        func.count(Sale.id),
+    ).where(
         Sale.tenant_id == tenant_id,
         Sale.created_at >= today,
         Sale.status.notin_(tuple(_FINANCIAL_EXCLUDED_SALE_STATUSES)),
@@ -214,7 +219,7 @@ async def dashboard_stats(
 
     month_start = period_start_local("month")
 
-    monthly_q = select(func.coalesce(func.sum(Sale.total), 0)).where(
+    monthly_q = select(func.coalesce(func.sum(Sale.total - Sale.refunded_total), 0)).where(
         Sale.tenant_id == tenant_id,
         Sale.created_at >= month_start,
         Sale.status.notin_(tuple(_FINANCIAL_EXCLUDED_SALE_STATUSES)),
@@ -657,7 +662,18 @@ async def finalize_sale(
     return finalized
 
 
-
+@router.post("/sales/{sale_id}/refund", response_model=SaleResponse)
+async def refund_sale(
+    sale_id: str,
+    body: SaleRefundRequest,
+    user: Annotated[User, Depends(require_permission("canSellPOS"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    tenant_id = require_tenant(user)
+    sale = await load_sale_for_user(db, user, tenant_id, sale_id)
+    updated = await apply_sale_refund(db, sale=sale, user=user, tenant_id=tenant_id, body=body)
+    await invalidate_tenant_cache(tenant_id)
+    return updated
 
 
 @router.get("/sales", response_model=PaginatedSales)
@@ -1013,6 +1029,19 @@ async def sync_batch(
 
                 )
 
+                processed += 1
+
+            elif item.entity_type == "sale" and item.action == "refund":
+                refund_data = SaleRefundRequest(**item.payload)
+                tenant_id = require_tenant(user)
+                sale = await load_sale_for_user(db, user, tenant_id, item.entity_id)
+                await apply_sale_refund(
+                    db,
+                    sale=sale,
+                    user=user,
+                    tenant_id=tenant_id,
+                    body=refund_data,
+                )
                 processed += 1
 
             elif item.entity_type == "product" and item.action == "create":
