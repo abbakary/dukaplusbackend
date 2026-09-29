@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import require_roles
+from app.core.deps import get_current_user, require_roles, require_tenant
+from app.services.platform_billing import get_billing_settings, get_grace_days
 from app.database import get_db
 from app.models import (
     PlatformBroadcast,
@@ -115,6 +116,18 @@ class BroadcastCreate(BaseModel):
     message: str
     channel: str = "both"
     target: str = "unpaid"  # all | unpaid
+    tenant_id: str | None = None
+
+
+class SubscriptionNudgeOut(BaseModel):
+    show: bool
+    days_left: int | None = None
+    title_en: str = ""
+    title_sw: str = ""
+    message_en: str = ""
+    message_sw: str = ""
+    source: str = "none"
+    subscription_expiry: str | None = None
 
 
 def _plan_out(p: PlatformPlan, subscribers: int = 0) -> PlanOut:
@@ -339,6 +352,14 @@ async def list_broadcasts(
     return [_broadcast_out(b) for b in result.scalars().all()]
 
 
+def _days_until_expiry(expiry: datetime | None) -> int | None:
+    if not expiry:
+        return None
+    today = datetime.now(UTC).date()
+    exp_date = expiry.date() if isinstance(expiry, datetime) else expiry
+    return (exp_date - today).days
+
+
 @router.post("/admin/broadcasts", response_model=BroadcastOut, status_code=status.HTTP_201_CREATED)
 async def send_broadcast(
     body: BroadcastCreate,
@@ -348,22 +369,35 @@ async def send_broadcast(
     tenants_result = await db.execute(select(Tenant))
     tenants = list(tenants_result.scalars().all())
     now = datetime.now(UTC)
+    grace_days = await get_grace_days(db)
 
-    if body.target == "unpaid":
-        audience = [
-            t for t in tenants
-            if t.status in (TenantStatus.grace_period, TenantStatus.suspended)
-            or (t.subscription_expiry and t.subscription_expiry < now)
-        ]
+    if body.tenant_id:
+        audience = [t for t in tenants if t.id == body.tenant_id]
+        target_audience = f"tenant:{body.tenant_id}"
+        target_region = audience[0].name if audience else body.tenant_id
+    elif body.target == "unpaid":
+        audience = []
+        for t in tenants:
+            days = _days_until_expiry(t.subscription_expiry)
+            if t.status in (TenantStatus.grace_period, TenantStatus.suspended):
+                audience.append(t)
+            elif t.subscription_expiry and t.subscription_expiry < now:
+                audience.append(t)
+            elif days is not None and 0 <= days <= 3:
+                audience.append(t)
+        target_audience = "unpaid"
+        target_region = f"{len(audience)} clients (expiring / unpaid)"
     else:
         audience = tenants
+        target_audience = "all"
+        target_region = "All clients"
 
     channel = body.channel if body.channel in ("in_app", "sms", "both") else "both"
     broadcast = PlatformBroadcast(
         title=body.title.strip(),
         message=body.message.strip(),
-        target_audience="all",
-        target_region=f"{len(audience)} clients" if body.target == "unpaid" else "All clients",
+        target_audience=target_audience,
+        target_region=target_region,
         channel=channel,
         sent_by=user.name,
         delivery_count=len(audience),
@@ -372,6 +406,116 @@ async def send_broadcast(
     db.add(broadcast)
     await db.flush()
     return _broadcast_out(broadcast)
+
+
+@router.get("/tenant/subscription-nudge", response_model=SubscriptionNudgeOut)
+async def tenant_subscription_nudge(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """In-app renewal nudge for shops expiring within 3 days or in grace."""
+    if user.role == UserRole.super_admin:
+        return SubscriptionNudgeOut(show=False)
+
+    tenant_id = require_tenant(user)
+    tenant = await db.get(Tenant, tenant_id)
+    if not tenant:
+        return SubscriptionNudgeOut(show=False)
+
+    grace_days = await get_grace_days(db)
+    days_left = _days_until_expiry(tenant.subscription_expiry)
+    expiry_iso = (
+        tenant.subscription_expiry.date().isoformat()
+        if tenant.subscription_expiry
+        else None
+    )
+
+    admin_row = (
+        await db.execute(
+            select(PlatformBroadcast)
+            .where(PlatformBroadcast.target_audience == f"tenant:{tenant_id}")
+            .order_by(PlatformBroadcast.sent_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    admin_fresh = (
+        admin_row
+        and admin_row.sent_at >= datetime.now(UTC) - timedelta(days=14)
+        and admin_row.channel in ("in_app", "both")
+    )
+
+    in_grace = tenant.status == TenantStatus.grace_period
+    expiring_soon = days_left is not None and 0 <= days_left <= 3
+    past_grace_window = (
+        days_left is not None
+        and days_left < 0
+        and grace_days > 0
+        and abs(days_left) <= grace_days
+    )
+    show = bool(admin_fresh or in_grace or expiring_soon or past_grace_window)
+
+    if not show:
+        return SubscriptionNudgeOut(show=False, subscription_expiry=expiry_iso)
+
+    shop = tenant.name or "Your shop"
+    billing = await get_billing_settings(db)
+    lipa = f"{billing.get('lipa_number', '0650124656')} ({billing.get('lipa_name', 'DUKAPLUS')})"
+    wa = billing.get("whatsapp_number", "0650124656")
+
+    if admin_fresh and admin_row:
+        return SubscriptionNudgeOut(
+            show=True,
+            days_left=days_left,
+            title_en=admin_row.title,
+            title_sw=admin_row.title,
+            message_en=admin_row.message,
+            message_sw=admin_row.message,
+            source="admin",
+            subscription_expiry=expiry_iso,
+        )
+
+    if in_grace or past_grace_window:
+        title_en = "Grace period — renew now"
+        title_sw = "Muda wa rehema — lipia haraka"
+        message_en = (
+            f"{shop}: your subscription expired. Renew via Lipa {lipa} and WhatsApp {wa} "
+            "before access is blocked."
+        )
+        message_sw = (
+            f"{shop}: usajili umeisha. Lipia Lipa {lipa} na WhatsApp {wa} kabla huduma kusitishwa."
+        )
+        return SubscriptionNudgeOut(
+            show=True,
+            days_left=days_left,
+            title_en=title_en,
+            title_sw=title_sw,
+            message_en=message_en,
+            message_sw=message_sw,
+            source="grace",
+            subscription_expiry=expiry_iso,
+        )
+
+    day_label_en = "today" if days_left == 0 else f"in {days_left} day(s)"
+    day_label_sw = "leo" if days_left == 0 else f"baada ya siku {days_left}"
+    title_en = f"Plan ends {day_label_en}"
+    title_sw = f"Usajili unaisha {day_label_sw}"
+    message_en = (
+        f"{shop}: pay now to avoid interruption to POS, inventory, and reports. "
+        f"Lipa {lipa} · WhatsApp {wa}."
+    )
+    message_sw = (
+        f"{shop}: lipia sasa kuepuka kukatwa POS, stoo na ripoti. Lipa {lipa} · WhatsApp {wa}."
+    )
+    return SubscriptionNudgeOut(
+        show=True,
+        days_left=days_left,
+        title_en=title_en,
+        title_sw=title_sw,
+        message_en=message_en,
+        message_sw=message_sw,
+        source="auto",
+        subscription_expiry=expiry_iso,
+    )
 
 
 # ── Platform billing settings (trial + Lipa / WhatsApp) ───────────────────────
