@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     redis_url: str = ""
     port: int = 8000
     seed_demo_data: bool = False
+    """When true, startup runs minimal pharmacy wipe+seed (dev only — never on production Postgres without intent)."""
+    seed_minimal_demo: bool = False
     super_admin_email: str = "admin@dukaplus.co.tz"
     super_admin_password: str = "admin123"
     super_admin_name: str = "Platform Admin"

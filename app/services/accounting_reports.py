@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.branch_scope import branch_id_filter
 from app.models import Customer, Expense, Product, PurchaseOrder, Sale, Supplier
-from app.models.accounting import JournalEntry, JournalLine, LedgerAccount
+from app.models.accounting import JournalEntry, JournalLine, LedgerAccount, VendorBill
 from app.services.accounting_defaults import ensure_default_chart
 from app.services.branch_service import get_tenant_default_branch_id
 
@@ -341,5 +341,12 @@ async def build_report_bundle(
             )
             or 0,
             "completed_sales_count": len(sales),
+            "draft_bill_count": await db.scalar(
+                select(func.count(VendorBill.id)).where(
+                    VendorBill.tenant_id == tenant_id,
+                    VendorBill.state == "draft",
+                )
+            )
+            or 0,
         },
     }

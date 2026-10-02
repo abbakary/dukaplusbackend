@@ -91,6 +91,13 @@ async def seed_demo_data() -> None:
     """Create platform super admin and optional sample tenants (idempotent)."""
     await ensure_super_admin()
 
+    if settings.seed_minimal_demo:
+        from app.seed_minimal_pharmacy import seed_minimal_pharmacy_demo
+
+        await seed_minimal_pharmacy_demo(skip_wipe=True)
+        logger.info("Minimal pharmacy demo ensured (SEED_MINIMAL_DEMO=true)")
+        return
+
     if settings.seed_demo_data:
         await seed_sample_data()
         await seed_login_aliases()

@@ -474,6 +474,40 @@ class TenantSettings(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class PrescriptionStatus(str, enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    dispensed = "dispensed"
+    cancelled = "cancelled"
+
+
+class Prescription(Base):
+    """Doctor reference / Rx verification queue (pharmacy tenants)."""
+    __tablename__ = "prescriptions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), index=True)
+    branch_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("branches.id"), nullable=True, index=True)
+    product_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("products.id"), nullable=True, index=True)
+    product_name: Mapped[str] = mapped_column(String(255), default="")
+    patient_name: Mapped[str] = mapped_column(String(255))
+    customer_phone: Mapped[str] = mapped_column(String(50), default="")
+    doctor_name: Mapped[str] = mapped_column(String(255))
+    doctor_license: Mapped[str] = mapped_column(String(100), default="")
+    prescription_number: Mapped[str] = mapped_column(String(100), default="")
+    quantity_requested: Mapped[float] = mapped_column(Float, default=1)
+    status: Mapped[PrescriptionStatus] = mapped_column(
+        Enum(PrescriptionStatus), default=PrescriptionStatus.pending, index=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verified_by_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    verified_by_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    sale_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("sales.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 from app.models.tra_efd import FiscalReceiptRecord, TenantTraEfdConfig  # noqa: E402,F401
 from app.models.accounting import (  # noqa: E402,F401
     HrPayrollContract,

@@ -7,14 +7,22 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
     device_info: str | None = None
 
     @field_validator("email")
     @classmethod
-    def normalize_email(cls, v: str) -> str:
-        return v.strip().lower()
+    def normalize_login_identifier(cls, v: str) -> str:
+        from app.core.tz_phone import normalize_tz_mobile_e164
+
+        trimmed = v.strip()
+        if "@" in trimmed:
+            return trimmed.lower()
+        phone = normalize_tz_mobile_e164(trimmed)
+        if phone:
+            return phone
+        return trimmed.lower()
 
 
 class RegisterRequest(BaseModel):
@@ -38,9 +46,27 @@ class RegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password(cls, v: str) -> str:
-        if len(v) < 6:
-            raise ValueError("Password must be at least 6 characters")
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        if not any(c.islower() for c in v) or not any(c.isupper() for c in v):
+            raise ValueError("Password must include upper and lower case letters")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must include at least one number")
+        if len(v) < 10 and not any(not c.isalnum() for c in v):
+            raise ValueError("Use 10+ characters or add a symbol (!@#…) for a stronger password")
         return v
+
+    @field_validator("phone")
+    @classmethod
+    def validate_tz_phone(cls, v: str) -> str:
+        from app.core.tz_phone import normalize_tz_mobile_e164
+
+        normalized = normalize_tz_mobile_e164(v)
+        if not normalized:
+            raise ValueError(
+                "Phone must be a valid Tanzania mobile (+255 7XX XXX XXX or 07XX XXX XXX)"
+            )
+        return normalized
 
     @field_validator("email")
     @classmethod

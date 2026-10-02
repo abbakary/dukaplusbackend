@@ -93,6 +93,18 @@ def ai_product_image_url(product_name: str, sku: str, variant: int = 0) -> str:
     return f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=512&height=512&seed={seed}&nologo=true"
 
 
+def ai_pharmacy_product_image_url(product_name: str, sku: str, variant: int = 0) -> str:
+    """AI product photo for pharmacy — medicines, cosmetics, supplements."""
+    label = (product_name or "pharmacy product").split("—")[0].split(" - ")[0].strip()[:120]
+    prompt = (
+        f"Professional pharmacy product photo of {label}, medicine or health cosmetic packaging, "
+        "Tanzania pharmacy retail, centered, clean white background, studio lighting, "
+        "sharp label detail, e-commerce catalog, no watermark"
+    )
+    seed = int(hashlib.sha256(f"pharm:{sku}:{variant}".encode()).hexdigest()[:8], 16) % 999_999
+    return f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=512&height=512&seed={seed}&nologo=true"
+
+
 def ai_retail_product_image_url(product_name: str, sku: str, variant: int = 0) -> str:
     """AI product photo for retail / supermarket showcase demos."""
     label = (product_name or "retail product").split("—")[0].split(" - ")[0].strip()[:120]

@@ -24,6 +24,7 @@ from app.api.v1 import (
     tenant_settings,
     tra_efd,
     workplace,
+    pharmacy,
 )
 from app.config import settings
 from app.database import init_db
@@ -110,6 +111,7 @@ app.include_router(hr.router, prefix="/api/v1")
 app.include_router(payroll.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(workplace.router, prefix="/api/v1")
+app.include_router(pharmacy.router, prefix="/api/v1")
 app.include_router(ai.router, prefix="/api/ai")
 app.include_router(ai.router, prefix="/api/v1/ai")
 

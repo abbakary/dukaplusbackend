@@ -8,6 +8,8 @@ from app.config import settings
 from app.core.branch_scope import is_tenant_wide_access
 from app.core.deps import get_current_user, get_user_permissions
 from app.core.subscription import sync_tenant_subscription_state, subscription_status_message
+from sqlalchemy import or_, select
+
 from app.core.security import (
     create_access_token,
     create_refresh_token_value,
@@ -16,6 +18,7 @@ from app.core.security import (
     store_refresh_token,
     verify_password,
 )
+from app.core.tz_phone import normalize_tz_mobile_e164
 from app.database import get_db
 from app.models import (
     TenantStatus,
@@ -87,9 +90,31 @@ def _build_user_response(user: User) -> UserResponse:
     )
 
 
+async def _resolve_login_user(db: AsyncSession, identifier: str) -> User | None:
+    ident = identifier.strip()
+    if "@" in ident:
+        return await get_user_by_email(db, ident.lower())
+    phone = normalize_tz_mobile_e164(ident)
+    if not phone:
+        return None
+    digits = phone.replace("+255", "")
+    alt_local = f"0{digits}"
+    result = await db.execute(
+        select(User).where(
+            or_(
+                User.phone == phone,
+                User.phone == digits,
+                User.phone == alt_local,
+                User.phone == f"+255 {digits[:3]} {digits[3:6]} {digits[6:]}",
+            )
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)]):
-    user = await get_user_by_email(db, body.email.strip().lower())
+    user = await _resolve_login_user(db, body.email)
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
     if not user.is_active:
