@@ -7,7 +7,9 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.branch_scope import resolve_branch_filter
+from app.core.branch_scope import assert_branch_record_access, branch_id_filter, resolve_branch_filter
+from app.core.branch_scope import resolve_sale_branch_id
+from app.services.branch_service import get_tenant_default_branch_id
 from app.core.deps import get_current_user, require_tenant, require_vendor_subscription
 from app.database import get_db
 from app.models import Branch, PurchaseOrder, Sale, Tenant, User
@@ -379,6 +381,7 @@ class VendorBillIn(BaseModel):
     due_date: date | None = None
     lines: list[VendorBillLineIn] = Field(default_factory=list)
     notes: str = ""
+    branch_id: str | None = None
 
 
 class VendorPaymentIn(BaseModel):
@@ -403,8 +406,70 @@ class QuotationIn(BaseModel):
     customer_id: str | None = None
     validity_days: int = 14
     validity_date: date | None = None
+    quotation_date: date | None = None
+    payment_terms: str = "immediate"
     lines: list[QuotationLineIn] = Field(default_factory=list)
     terms: str = ""
+    branch_id: str | None = None
+
+
+async def _apply_doc_branch_filter(q, column, user: User, db: AsyncSession, tenant_id: str, branch_id: str | None):
+    effective = resolve_branch_filter(user, branch_id)
+    if not effective:
+        return q
+    hq = await get_tenant_default_branch_id(db, tenant_id)
+    clause = branch_id_filter(column, effective, hq)
+    if clause is not None:
+        return q.where(clause)
+    return q
+
+
+def _record_matches_branch_filter(record_branch_id: str | None, effective: str | None, hq_branch_id: str | None) -> bool:
+    if not effective:
+        return True
+    if hq_branch_id and effective == hq_branch_id:
+        return record_branch_id in (None, effective)
+    return record_branch_id == effective
+
+
+async def _load_vendor_bill(
+    db: AsyncSession,
+    user: User,
+    tenant_id: str,
+    bill_id: str,
+    *,
+    branch_id: str | None = None,
+) -> VendorBill:
+    bill = await db.get(VendorBill, bill_id)
+    if not bill or bill.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Bill not found")
+    assert_branch_record_access(user, bill.branch_id, label="bill")
+    effective = resolve_branch_filter(user, branch_id)
+    if effective:
+        hq = await get_tenant_default_branch_id(db, tenant_id)
+        if not _record_matches_branch_filter(bill.branch_id, effective, hq):
+            raise HTTPException(status_code=404, detail="Bill not found")
+    return bill
+
+
+async def _load_quotation(
+    db: AsyncSession,
+    user: User,
+    tenant_id: str,
+    quotation_id: str,
+    *,
+    branch_id: str | None = None,
+) -> SaleQuotation:
+    q = await db.get(SaleQuotation, quotation_id)
+    if not q or q.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    assert_branch_record_access(user, q.branch_id, label="quotation")
+    effective = resolve_branch_filter(user, branch_id)
+    if effective:
+        hq = await get_tenant_default_branch_id(db, tenant_id)
+        if not _record_matches_branch_filter(q.branch_id, effective, hq):
+            raise HTTPException(status_code=404, detail="Quotation not found")
+    return q
 
 
 async def _tenant_company(db: AsyncSession, tenant_id: str) -> dict[str, Any]:
@@ -512,6 +577,7 @@ async def _bill_payload(db: AsyncSession, b: VendorBill) -> dict[str, Any]:
         "payments_count": payments_count,
         "purchase_matching_count": purchase_matching_count,
         "purchase_order_id": b.purchase_order_id,
+        "branch_id": b.branch_id,
         "po_candidates_count": po_candidates_count,
         "smart_buttons": {
             "payments": payments_count,
@@ -579,9 +645,11 @@ async def list_vendor_bills(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     state: str | None = Query(None),
+    branch_id: str | None = Query(None),
 ):
     tenant_id = require_tenant(user)
     q = select(VendorBill).where(VendorBill.tenant_id == tenant_id).order_by(VendorBill.created_at.desc())
+    q = await _apply_doc_branch_filter(q, VendorBill.branch_id, user, db, tenant_id, branch_id)
     if state:
         q = q.where(VendorBill.state == state)
     rows = (await db.execute(q.limit(100))).scalars().all()
@@ -600,8 +668,10 @@ async def create_vendor_bill(
     tenant_id = require_tenant(user)
     bill_date = body.bill_date or date.today()
     untaxed, tax, total, out_lines = _compute_bill_amounts(body.lines)
+    record_branch = await resolve_sale_branch_id(db, user, tenant_id, body.branch_id)
     bill = VendorBill(
         tenant_id=tenant_id,
+        branch_id=record_branch,
         name="Draft",
         state="draft",
         vendor_name=body.vendor_name.strip(),
@@ -626,11 +696,10 @@ async def get_vendor_bill(
     bill_id: str,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    branch_id: str | None = Query(None),
 ):
     tenant_id = require_tenant(user)
-    bill = await db.get(VendorBill, bill_id)
-    if not bill or bill.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Bill not found")
+    bill = await _load_vendor_bill(db, user, tenant_id, bill_id, branch_id=branch_id)
     return await _bill_payload(db, bill)
 
 
@@ -642,9 +711,7 @@ async def update_vendor_bill(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    bill = await db.get(VendorBill, bill_id)
-    if not bill or bill.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Bill not found")
+    bill = await _load_vendor_bill(db, user, tenant_id, bill_id, branch_id=body.branch_id)
     if bill.state != "draft":
         raise HTTPException(status_code=400, detail="Only draft bills can be edited")
     bill_date = body.bill_date or bill.bill_date
@@ -671,9 +738,7 @@ async def vendor_bill_pdf(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    bill = await db.get(VendorBill, bill_id)
-    if not bill or bill.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Bill not found")
+    bill = await _load_vendor_bill(db, user, tenant_id, bill_id)
     payload = await _bill_payload(db, bill)
     company = await _tenant_company(db, tenant_id)
     return HTMLResponse(content=render_vendor_bill_html(company=company, bill=payload))
@@ -686,9 +751,7 @@ async def cancel_vendor_bill(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    bill = await db.get(VendorBill, bill_id)
-    if not bill or bill.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Bill not found")
+    bill = await _load_vendor_bill(db, user, tenant_id, bill_id)
     if bill.state != "draft":
         raise HTTPException(status_code=400, detail="Only draft bills can be cancelled")
     bill.state = "cancelled"
@@ -703,9 +766,7 @@ async def confirm_vendor_bill(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    bill = await db.get(VendorBill, bill_id)
-    if not bill or bill.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Bill not found")
+    bill = await _load_vendor_bill(db, user, tenant_id, bill_id)
     if bill.state == "posted":
         return await _bill_payload(db, bill)
     if not bill.lines_json or bill.lines_json == "[]":
@@ -727,14 +788,13 @@ async def pay_vendor_bill(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    bill = await db.get(VendorBill, bill_id)
-    if not bill or bill.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Bill not found")
+    bill = await _load_vendor_bill(db, user, tenant_id, bill_id)
     await register_bill_payment(db, bill, body.amount, journal_code=body.journal_code, reference=body.reference)
     return await _bill_payload(db, bill)
 
 
 def _quotation_payload(q: SaleQuotation) -> dict[str, Any]:
+    qdate = q.quotation_date or (q.created_at.date() if q.created_at else None)
     return {
         "id": q.id,
         "name": q.name,
@@ -742,6 +802,9 @@ def _quotation_payload(q: SaleQuotation) -> dict[str, Any]:
         "customer_name": q.customer_name,
         "customer_id": q.customer_id,
         "validity_date": q.validity_date.isoformat() if q.validity_date else None,
+        "quotation_date": qdate.isoformat() if qdate else None,
+        "payment_terms": q.payment_terms or "immediate",
+        "branch_id": q.branch_id,
         "amount_untaxed": q.amount_untaxed,
         "amount_tax": q.amount_tax,
         "amount_total": q.amount_total,
@@ -781,14 +844,13 @@ def _compute_quotation_amounts(lines: list[QuotationLineIn]) -> tuple[float, flo
 async def list_quotations(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    branch_id: str | None = Query(None),
 ):
     tenant_id = require_tenant(user)
-    rows = (
-        await db.execute(
-            select(SaleQuotation).where(SaleQuotation.tenant_id == tenant_id).order_by(SaleQuotation.created_at.desc())
-        )
-    ).scalars().all()
-    return [_quotation_payload(q) for q in rows]
+    q = select(SaleQuotation).where(SaleQuotation.tenant_id == tenant_id).order_by(SaleQuotation.created_at.desc())
+    q = await _apply_doc_branch_filter(q, SaleQuotation.branch_id, user, db, tenant_id, branch_id)
+    rows = (await db.execute(q.limit(100))).scalars().all()
+    return [_quotation_payload(row) for row in rows]
 
 
 @router.post("/quotations")
@@ -803,14 +865,19 @@ async def create_quotation(
         await db.scalar(select(func.count()).select_from(SaleQuotation).where(SaleQuotation.tenant_id == tenant_id))
         or 0
     )
-    validity = body.validity_date or (date.today() + timedelta(days=body.validity_days))
+    q_date = body.quotation_date or date.today()
+    validity = body.validity_date or (q_date + timedelta(days=body.validity_days))
+    record_branch = await resolve_sale_branch_id(db, user, tenant_id, body.branch_id)
     q = SaleQuotation(
         tenant_id=tenant_id,
+        branch_id=record_branch,
         name=f"QT/{date.today().year}/{int(count) + 1:04d}",
         state="draft",
         customer_name=body.customer_name.strip(),
         customer_id=body.customer_id,
         validity_date=validity,
+        quotation_date=q_date,
+        payment_terms=(body.payment_terms or "immediate").strip()[:40],
         amount_untaxed=untaxed,
         amount_tax=tax,
         amount_total=total,
@@ -827,11 +894,10 @@ async def get_quotation(
     quotation_id: str,
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    branch_id: str | None = Query(None),
 ):
     tenant_id = require_tenant(user)
-    q = await db.get(SaleQuotation, quotation_id)
-    if not q or q.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Quotation not found")
+    q = await _load_quotation(db, user, tenant_id, quotation_id, branch_id=branch_id)
     return _quotation_payload(q)
 
 
@@ -843,18 +909,21 @@ async def update_quotation(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    q = await db.get(SaleQuotation, quotation_id)
-    if not q or q.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Quotation not found")
+    q = await _load_quotation(db, user, tenant_id, quotation_id, branch_id=body.branch_id)
     if q.state not in ("draft", "sent"):
         raise HTTPException(status_code=400, detail="Quotation cannot be edited in this state")
     untaxed, tax, total, lines_out = _compute_quotation_amounts(body.lines)
     q.customer_name = body.customer_name.strip()
     q.customer_id = body.customer_id
+    if body.quotation_date:
+        q.quotation_date = body.quotation_date
+    if body.payment_terms:
+        q.payment_terms = body.payment_terms.strip()[:40]
     if body.validity_date:
         q.validity_date = body.validity_date
     elif body.validity_days:
-        q.validity_date = date.today() + timedelta(days=body.validity_days)
+        base = q.quotation_date or date.today()
+        q.validity_date = base + timedelta(days=body.validity_days)
     q.amount_untaxed = untaxed
     q.amount_tax = tax
     q.amount_total = total
@@ -871,9 +940,7 @@ async def confirm_quotation(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    q = await db.get(SaleQuotation, quotation_id)
-    if not q or q.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Quotation not found")
+    q = await _load_quotation(db, user, tenant_id, quotation_id)
     if q.state in ("cancel",):
         raise HTTPException(status_code=400, detail="Quotation is cancelled")
     q.state = "sale"
@@ -888,9 +955,7 @@ async def cancel_quotation(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    q = await db.get(SaleQuotation, quotation_id)
-    if not q or q.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Quotation not found")
+    q = await _load_quotation(db, user, tenant_id, quotation_id)
     if q.state == "sale":
         raise HTTPException(status_code=400, detail="Confirmed quotations cannot be cancelled")
     q.state = "cancel"
@@ -905,9 +970,7 @@ async def send_quotation(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    q = await db.get(SaleQuotation, quotation_id)
-    if not q or q.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Quotation not found")
+    q = await _load_quotation(db, user, tenant_id, quotation_id)
     q.state = "sent"
     await db.flush()
     return _quotation_payload(q)
@@ -920,9 +983,7 @@ async def quotation_pdf(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    q = await db.get(SaleQuotation, quotation_id)
-    if not q or q.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Quotation not found")
+    q = await _load_quotation(db, user, tenant_id, quotation_id)
     payload = _quotation_payload(q)
     company = await _tenant_company(db, tenant_id)
     return HTMLResponse(content=render_quotation_html(company=company, quotation=payload))
@@ -1044,9 +1105,7 @@ async def api_bill_po_candidates(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    bill = await db.get(VendorBill, bill_id)
-    if not bill or bill.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Bill not found")
+    bill = await _load_vendor_bill(db, user, tenant_id, bill_id)
     return {
         "candidates": await list_po_candidates(db, tenant_id=tenant_id, bill=bill),
         "matches": await list_matches_for_bill(db, tenant_id=tenant_id, bill_id=bill_id),
@@ -1066,9 +1125,7 @@ async def api_link_bill_po(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    bill = await db.get(VendorBill, bill_id)
-    if not bill or bill.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Bill not found")
+    bill = await _load_vendor_bill(db, user, tenant_id, bill_id)
     try:
         match = await link_bill_to_po(
             db,

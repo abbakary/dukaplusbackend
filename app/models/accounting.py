@@ -91,6 +91,8 @@ class SaleQuotation(Base):
     customer_name: Mapped[str] = mapped_column(String(255), default="")
     customer_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     validity_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    quotation_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    payment_terms: Mapped[str] = mapped_column(String(40), default="immediate")
     amount_untaxed: Mapped[float] = mapped_column(Float, default=0)
     amount_tax: Mapped[float] = mapped_column(Float, default=0)
     amount_total: Mapped[float] = mapped_column(Float, default=0)

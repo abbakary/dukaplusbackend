@@ -17,6 +17,12 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "ALTER TABLE sales ADD COLUMN IF NOT EXISTS acc_move_id VARCHAR(36)",
     "CREATE INDEX IF NOT EXISTS ix_vendor_bills_acc_move_id ON vendor_bills (acc_move_id)",
     "CREATE INDEX IF NOT EXISTS ix_sales_acc_move_id ON sales (acc_move_id)",
+    "ALTER TABLE vendor_bills ADD COLUMN IF NOT EXISTS branch_id VARCHAR(36)",
+    "CREATE INDEX IF NOT EXISTS ix_vendor_bills_branch_id ON vendor_bills (branch_id)",
+    "ALTER TABLE sale_quotations ADD COLUMN IF NOT EXISTS branch_id VARCHAR(36)",
+    "ALTER TABLE sale_quotations ADD COLUMN IF NOT EXISTS quotation_date DATE",
+    "ALTER TABLE sale_quotations ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(40) DEFAULT 'immediate'",
+    "CREATE INDEX IF NOT EXISTS ix_sale_quotations_branch_id ON sale_quotations (branch_id)",
 )
 
 

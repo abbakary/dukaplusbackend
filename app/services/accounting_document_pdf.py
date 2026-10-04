@@ -142,7 +142,9 @@ def render_quotation_html(*, company: dict[str, Any], quotation: dict[str, Any])
     <div style="text-align:right">
       <div class="doc-title">Quotation</div>
       <div>{_esc(quotation.get('name', ''))}</div>
+      <div>Date: {_esc(quotation.get('quotation_date', ''))}</div>
       <div>Valid until: {_esc(quotation.get('validity_date', ''))}</div>
+      <div>Payment: {_esc(quotation.get('payment_terms', 'immediate'))}</div>
       <div>Status: {_esc(quotation.get('state', 'draft'))}</div>
     </div>
   </div>
