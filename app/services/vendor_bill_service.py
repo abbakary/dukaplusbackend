@@ -8,9 +8,10 @@ from datetime import date, datetime, UTC
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.accounting import JournalEntry, VendorBill
+from app.models.accounting import AccMove, VendorBill
+from app.services.acc_posting_service import MoveLineIn, post_move, register_vendor_payment_move
 from app.services.accounting_defaults import ensure_default_chart
-from app.services.accounting_posting import _add_line
+from app.services.fiscal_position_service import resolve_fiscal_position
 
 
 async def _next_bill_name(db: AsyncSession, tenant_id: str, bill_date: date) -> str:
@@ -25,15 +26,15 @@ async def _next_bill_name(db: AsyncSession, tenant_id: str, bill_date: date) -> 
     return f"{prefix}{n:04d}"
 
 
-async def post_vendor_bill(db: AsyncSession, bill: VendorBill) -> JournalEntry:
-    if bill.state == "posted" and bill.journal_entry_id:
-        existing = await db.get(JournalEntry, bill.journal_entry_id)
+async def post_vendor_bill(db: AsyncSession, bill: VendorBill) -> AccMove:
+    if bill.state == "posted" and bill.acc_move_id:
+        existing = await db.get(AccMove, bill.acc_move_id)
         if existing:
             return existing
 
-    accounts = await ensure_default_chart(db, tenant_id=bill.tenant_id)
-    by_code = {a.code: a for a in accounts}
-
+    await ensure_default_chart(db, tenant_id=bill.tenant_id)
+    fp = await resolve_fiscal_position(db, bill.tenant_id)
+    vat_in_code = fp.vat_input_account or "1310"
     lines = json.loads(bill.lines_json or "[]")
     expense_total = 0.0
     for ln in lines:
@@ -43,34 +44,56 @@ async def post_vendor_bill(db: AsyncSession, bill: VendorBill) -> JournalEntry:
     tax = float(bill.amount_tax or 0)
     total = float(bill.amount_total or untaxed + tax)
 
-    entry = JournalEntry(
+    expense_code = "5100"
+    move_lines = [
+        MoveLineIn(
+            expense_code,
+            bill.vendor_name or "Expense",
+            debit=untaxed,
+            partner_id=bill.vendor_id,
+            partner_name=bill.vendor_name or "",
+        ),
+    ]
+    if tax > 0:
+        move_lines.append(MoveLineIn(vat_in_code, "VAT Input", debit=tax, display_type="tax"))
+    move_lines.append(
+        MoveLineIn(
+            "2000",
+            "Accounts Payable",
+            credit=total,
+            partner_id=bill.vendor_id,
+            partner_name=bill.vendor_name or "",
+        )
+    )
+
+    if bill.name == "Draft" or not bill.name.startswith("BILL/"):
+        bill.name = await _next_bill_name(db, bill.tenant_id, bill.bill_date)
+
+    move = await post_move(
+        db,
         tenant_id=bill.tenant_id,
         branch_id=bill.branch_id,
-        entry_date=bill.bill_date,
-        reference=bill.name,
-        memo=f"Vendor bill — {bill.vendor_name} {bill.vendor_bill_ref}".strip(),
-        source="vendor_bill",
+        journal_code="PUR",
+        move_type="in_invoice",
+        move_date=bill.bill_date,
+        partner_id=bill.vendor_id,
+        partner_name=bill.vendor_name or "",
+        ref=bill.vendor_bill_ref or bill.name,
+        narration=f"Vendor bill — {bill.vendor_name}",
+        lines=move_lines,
+        source_type="vendor_bill",
         source_id=bill.id,
+        amount_total=total,
+        mirror_journal=True,
     )
-    db.add(entry)
-    await db.flush()
-
-    expense_code = "5100" if by_code.get("5100") else "6000"
-    await _add_line(db, entry.id, by_code, expense_code, bill.vendor_name or "Expense", untaxed, 0)
-    if tax > 0:
-        vat_in = "1310" if by_code.get("1310") else "1300"
-        await _add_line(db, entry.id, by_code, vat_in, "VAT Input", tax, 0)
-    await _add_line(db, entry.id, by_code, "2000", "Accounts Payable", 0, total)
 
     bill.state = "posted"
     bill.payment_state = "not_paid"
     bill.amount_residual = total
-    bill.journal_entry_id = entry.id
+    bill.acc_move_id = move.id
     bill.posted_at = datetime.now(UTC)
-    if bill.name == "Draft" or not bill.name.startswith("BILL/"):
-        bill.name = await _next_bill_name(db, bill.tenant_id, bill.bill_date)
     await db.flush()
-    return entry
+    return move
 
 
 async def register_bill_payment(
@@ -87,27 +110,22 @@ async def register_bill_payment(
     if pay <= 0:
         return
 
-    accounts = await ensure_default_chart(db, tenant_id=bill.tenant_id)
-    by_code = {a.code: a for a in accounts}
-    entry = JournalEntry(
+    await register_vendor_payment_move(
+        db,
         tenant_id=bill.tenant_id,
         branch_id=bill.branch_id,
-        entry_date=date.today(),
+        bill_id=bill.id,
+        partner_id=bill.vendor_id,
+        partner_name=bill.vendor_name or "",
+        amount=pay,
         reference=reference or f"PAY-{bill.name}",
-        memo=f"Payment — {bill.vendor_name}",
-        source="vendor_payment",
-        source_id=bill.id,
+        journal_code="CSH" if journal_code == "1000" else "BNK",
     )
-    db.add(entry)
-    await db.flush()
 
-    await _add_line(db, entry.id, by_code, "2000", "Accounts Payable", pay, 0)
-    await _add_line(db, entry.id, by_code, journal_code, "Payment", 0, pay)
-
-    bill.amount_residual = round(float(bill.amount_residual) - pay, 2)
+    bill.amount_residual = round(float(bill.amount_residual or 0) - pay, 2)
     if bill.amount_residual <= 0.01:
-        bill.amount_residual = 0
         bill.payment_state = "paid"
-    else:
-        bill.payment_state = "partial"
+        bill.amount_residual = 0.0
+    elif pay > 0:
+        bill.payment_state = "partial" if bill.payment_state != "in_payment" else "in_payment"
     await db.flush()

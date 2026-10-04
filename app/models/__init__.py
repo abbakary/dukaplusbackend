@@ -238,6 +238,7 @@ class Sale(Base):
     cashier_name: Mapped[str] = mapped_column(String(255), default="")
     cashier_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     tra_efd_signature: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    acc_move_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="completed")
     synced: Mapped[bool] = mapped_column(Boolean, default=True)
     client_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
@@ -510,9 +511,20 @@ class Prescription(Base):
 
 from app.models.tra_efd import FiscalReceiptRecord, TenantTraEfdConfig  # noqa: E402,F401
 from app.models.accounting import (  # noqa: E402,F401
+    AccBankStatement,
+    AccBankStatementLine,
+    AccBillPurchaseMatch,
+    AccFiscalPosition,
+    AccFinancialReportLine,
+    AccJournal,
+    AccMove,
+    AccMoveLine,
+    AccPayment,
     HrPayrollContract,
     HrPayslip,
     JournalEntry,
     JournalLine,
     LedgerAccount,
+    SaleQuotation,
+    VendorBill,
 )

@@ -71,6 +71,7 @@ class VendorBill(Base):
     amount_residual: Mapped[float] = mapped_column(Float, default=0)
     lines_json: Mapped[str] = mapped_column(Text, default="[]")
     journal_entry_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("journal_entries.id"), nullable=True)
+    acc_move_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     purchase_order_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -132,3 +133,158 @@ class HrPayslip(Base):
     payslip_number: Mapped[str] = mapped_column(String(60), default="")
     payment_reference: Mapped[str] = mapped_column(String(120), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AccJournal(Base):
+    """Odoo account.journal — sales, purchases, bank, cash, general."""
+
+    __tablename__ = "acc_journals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), index=True)
+    code: Mapped[str] = mapped_column(String(10))
+    name: Mapped[str] = mapped_column(String(120))
+    journal_type: Mapped[str] = mapped_column(String(20), default="general")
+    default_account_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("ledger_accounts.id"), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AccMove(Base):
+    """Odoo account.move — immutable when posted."""
+
+    __tablename__ = "acc_moves"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), index=True)
+    branch_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    journal_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("acc_journals.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(64), default="/")
+    move_type: Mapped[str] = mapped_column(String(20), default="entry")
+    state: Mapped[str] = mapped_column(String(20), default="draft")
+    payment_state: Mapped[str] = mapped_column(String(20), default="not_paid")
+    date: Mapped[date] = mapped_column(Date)
+    invoice_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    partner_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    partner_name: Mapped[str] = mapped_column(String(255), default="")
+    ref: Mapped[str] = mapped_column(String(120), default="")
+    narration: Mapped[str] = mapped_column(Text, default="")
+    amount_untaxed: Mapped[float] = mapped_column(Float, default=0)
+    amount_tax: Mapped[float] = mapped_column(Float, default=0)
+    amount_total: Mapped[float] = mapped_column(Float, default=0)
+    amount_residual: Mapped[float] = mapped_column(Float, default=0)
+    source_type: Mapped[str] = mapped_column(String(40), default="")
+    source_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    reversed_move_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    posted_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AccMoveLine(Base):
+    __tablename__ = "acc_move_lines"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    move_id: Mapped[str] = mapped_column(String(36), ForeignKey("acc_moves.id"), index=True)
+    account_id: Mapped[str] = mapped_column(String(36), ForeignKey("ledger_accounts.id"), index=True)
+    partner_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    partner_name: Mapped[str] = mapped_column(String(255), default="")
+    name: Mapped[str] = mapped_column(String(255), default="")
+    debit: Mapped[float] = mapped_column(Float, default=0)
+    credit: Mapped[float] = mapped_column(Float, default=0)
+    display_type: Mapped[str] = mapped_column(String(20), default="product")
+    amount_residual: Mapped[float] = mapped_column(Float, default=0)
+    reconciled: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class AccPayment(Base):
+    __tablename__ = "acc_payments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), index=True)
+    branch_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    payment_type: Mapped[str] = mapped_column(String(20), default="outbound")
+    partner_type: Mapped[str] = mapped_column(String(20), default="supplier")
+    partner_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    partner_name: Mapped[str] = mapped_column(String(255), default="")
+    amount: Mapped[float] = mapped_column(Float, default=0)
+    date: Mapped[date] = mapped_column(Date)
+    journal_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("acc_journals.id"), nullable=True)
+    move_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("acc_moves.id"), nullable=True)
+    bill_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("vendor_bills.id"), nullable=True)
+    reference: Mapped[str] = mapped_column(String(120), default="")
+    state: Mapped[str] = mapped_column(String(20), default="posted")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AccFiscalPosition(Base):
+    """Odoo account.fiscal.position — tax/account mapping (TZ standard vs export)."""
+
+    __tablename__ = "acc_fiscal_positions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    code: Mapped[str] = mapped_column(String(30), default="standard")
+    vat_output_account: Mapped[str] = mapped_column(String(20), default="2100")
+    vat_input_account: Mapped[str] = mapped_column(String(20), default="1310")
+    default_sale_tax_rate: Mapped[float] = mapped_column(Float, default=18.0)
+    auto_apply: Mapped[bool] = mapped_column(Boolean, default=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AccBankStatement(Base):
+    __tablename__ = "acc_bank_statements"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), index=True)
+    journal_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("acc_journals.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(64), default="Statement")
+    date_from: Mapped[date] = mapped_column(Date)
+    date_to: Mapped[date] = mapped_column(Date)
+    balance_start: Mapped[float] = mapped_column(Float, default=0)
+    balance_end: Mapped[float] = mapped_column(Float, default=0)
+    state: Mapped[str] = mapped_column(String(20), default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AccBankStatementLine(Base):
+    __tablename__ = "acc_bank_statement_lines"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    statement_id: Mapped[str] = mapped_column(String(36), ForeignKey("acc_bank_statements.id"), index=True)
+    date: Mapped[date] = mapped_column(Date)
+    payment_ref: Mapped[str] = mapped_column(String(120), default="")
+    partner_name: Mapped[str] = mapped_column(String(255), default="")
+    amount: Mapped[float] = mapped_column(Float, default=0)
+    is_reconciled: Mapped[bool] = mapped_column(Boolean, default=False)
+    move_line_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("acc_move_lines.id"), nullable=True)
+
+
+class AccBillPurchaseMatch(Base):
+    """Links vendor bill ↔ purchase order (Odoo bill matching)."""
+
+    __tablename__ = "acc_bill_purchase_matches"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), index=True)
+    bill_id: Mapped[str] = mapped_column(String(36), ForeignKey("vendor_bills.id"), index=True)
+    purchase_order_id: Mapped[str] = mapped_column(String(36), index=True)
+    matched_amount: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AccFinancialReportLine(Base):
+    __tablename__ = "acc_financial_report_lines"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), index=True)
+    report_code: Mapped[str] = mapped_column(String(40), index=True)
+    parent_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("acc_financial_report_lines.id"), nullable=True)
+    sequence: Mapped[int] = mapped_column(default=0)
+    name: Mapped[str] = mapped_column(String(255))
+    line_type: Mapped[str] = mapped_column(String(20), default="sum")
+    account_codes: Mapped[str] = mapped_column(Text, default="")
+    account_types: Mapped[str] = mapped_column(Text, default="")
+    sign: Mapped[int] = mapped_column(default=1)
+    style: Mapped[str] = mapped_column(String(20), default="normal")

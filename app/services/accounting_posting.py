@@ -8,8 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Product, Sale
-from app.models.accounting import JournalEntry, JournalLine
+from app.models.accounting import AccMove, JournalEntry, JournalLine
 from app.schemas import SaleItemCreate
+from app.services.acc_posting_service import MoveLineIn, post_move
 from app.services.accounting_defaults import ensure_default_chart
 
 COMPLETED_SALE_STATUSES = frozenset({"completed", "pending_credit", "ready_to_complete"})
@@ -23,7 +24,16 @@ async def _entry_exists(db: AsyncSession, tenant_id: str, source: str, source_id
             JournalEntry.source_id == source_id,
         )
     )
-    return row.scalar_one_or_none() is not None
+    if row.scalar_one_or_none():
+        return True
+    move = await db.scalar(
+        select(AccMove.id).where(
+            AccMove.tenant_id == tenant_id,
+            AccMove.source_type == source,
+            AccMove.source_id == source_id,
+        )
+    )
+    return move is not None
 
 
 async def _add_line(
@@ -88,6 +98,42 @@ async def post_sale_journal(
     if vat > 0:
         await _add_line(db, entry.id, by_code, "2100", "VAT payable TRA", 0, vat)
 
+    move_lines = [
+        MoveLineIn("1000", "Cash & mobile", debit=paid),
+        MoveLineIn(
+            "1200",
+            "Accounts receivable",
+            debit=ar,
+            partner_id=sale.customer_id,
+            partner_name=sale.customer_name or "Walk-in",
+        ),
+        MoveLineIn("4000", "Sales revenue", credit=revenue),
+    ]
+    if vat > 0:
+        move_lines.append(MoveLineIn("2100", "VAT payable TRA", credit=vat, display_type="tax"))
+    acc_move = await post_move(
+        db,
+        tenant_id=tenant_id,
+        branch_id=sale.branch_id,
+        journal_code="SAL",
+        move_type="out_invoice",
+        move_date=entry_date,
+        partner_id=sale.customer_id,
+        partner_name=sale.customer_name or "Walk-in",
+        ref=sale.receipt_number or entry.reference,
+        narration=entry.memo,
+        lines=move_lines,
+        source_type="pos_sale",
+        source_id=sale.id,
+        amount_total=float(sale.total or 0),
+        mirror_journal=False,
+    )
+    sale.acc_move_id = acc_move.id
+    acc_move.amount_untaxed = float(sale.subtotal or 0)
+    acc_move.amount_tax = float(sale.vat_amount or 0)
+    acc_move.payment_state = "paid" if float(sale.balance_remaining or 0) <= 0.01 else "not_paid"
+    acc_move.amount_residual = float(sale.balance_remaining or 0)
+
     cogs = 0.0
     for raw in sale.items or []:
         try:
@@ -116,6 +162,25 @@ async def post_sale_journal(
         await db.flush()
         await _add_line(db, cogs_entry.id, by_code, "5000", "COGS", cogs, 0)
         await _add_line(db, cogs_entry.id, by_code, "1300", "Inventory", 0, cogs)
+        await post_move(
+            db,
+            tenant_id=tenant_id,
+            branch_id=sale.branch_id,
+            journal_code="GEN",
+            move_type="entry",
+            move_date=entry_date,
+            partner_id=None,
+            partner_name="",
+            ref=cogs_entry.reference,
+            narration="Cost of goods sold",
+            lines=[
+                MoveLineIn("5000", "COGS", debit=cogs),
+                MoveLineIn("1300", "Inventory", credit=cogs),
+            ],
+            source_type="pos_sale_cogs",
+            source_id=sale.id,
+            mirror_journal=False,
+        )
 
     await db.flush()
 
