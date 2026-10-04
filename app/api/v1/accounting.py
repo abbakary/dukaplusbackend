@@ -41,6 +41,7 @@ from app.models.accounting import (
     VendorBill,
 )
 from app.services.db_schema_patches import ensure_accounting_schema
+from app.services.acc_posting_service import AccPostingError
 from app.services.vendor_bill_service import post_vendor_bill, register_bill_payment
 from app.services.accounting_defaults import ensure_default_chart
 from app.services.accounting_posting import COMPLETED_SALE_STATUSES, post_sale_journal
@@ -709,7 +710,12 @@ async def confirm_vendor_bill(
         return await _bill_payload(db, bill)
     if not bill.lines_json or bill.lines_json == "[]":
         raise HTTPException(status_code=400, detail="Add at least one invoice line")
-    await post_vendor_bill(db, bill)
+    try:
+        await post_vendor_bill(db, bill)
+    except AccPostingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return await _bill_payload(db, bill)
 
 

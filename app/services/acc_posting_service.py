@@ -35,10 +35,6 @@ class AccPostingError(ValueError):
 
 
 async def ensure_default_journals(db: AsyncSession, tenant_id: str) -> dict[str, AccJournal]:
-    result = await db.execute(select(AccJournal).where(AccJournal.tenant_id == tenant_id))
-    rows = list(result.scalars().all())
-    if rows:
-        return {j.code: j for j in rows}
     defaults = [
         ("SAL", "Sales", "sale"),
         ("PUR", "Purchases", "purchase"),
@@ -46,12 +42,17 @@ async def ensure_default_journals(db: AsyncSession, tenant_id: str) -> dict[str,
         ("CSH", "Cash", "cash"),
         ("GEN", "Miscellaneous", "general"),
     ]
-    out: dict[str, AccJournal] = {}
+    result = await db.execute(select(AccJournal).where(AccJournal.tenant_id == tenant_id))
+    out: dict[str, AccJournal] = {j.code: j for j in result.scalars().all()}
+    added = False
     for code, name, jtype in defaults:
-        j = AccJournal(tenant_id=tenant_id, code=code, name=name, journal_type=jtype)
-        db.add(j)
-        out[code] = j
-    await db.flush()
+        if code not in out:
+            j = AccJournal(tenant_id=tenant_id, code=code, name=name, journal_type=jtype)
+            db.add(j)
+            out[code] = j
+            added = True
+    if added:
+        await db.flush()
     return out
 
 
@@ -94,7 +95,12 @@ async def post_move(
     accounts = await db.execute(select(LedgerAccount).where(LedgerAccount.tenant_id == tenant_id))
     by_code = {a.code: a for a in accounts.scalars().all()}
     journals = await ensure_default_journals(db, tenant_id)
-    journal = journals.get(journal_code) or journals.get("GEN")
+    journal = (
+        journals.get(journal_code)
+        or journals.get("PUR")
+        or journals.get("GEN")
+        or (next(iter(journals.values())) if journals else None)
+    )
 
     total_debit = round(sum(l.debit for l in lines), 2)
     total_credit = round(sum(l.credit for l in lines), 2)

@@ -14,6 +14,50 @@ from app.services.accounting_defaults import ensure_default_chart
 from app.services.fiscal_position_service import resolve_fiscal_position
 
 
+def _line_net_amount(ln: dict) -> float:
+    raw = ln.get("amount")
+    if raw is not None and str(raw).strip() != "":
+        return float(raw)
+    return float(ln.get("quantity") or 0) * float(ln.get("price_unit") or 0)
+
+
+def _amounts_from_bill_lines(bill: VendorBill) -> tuple[float, float, float]:
+    """Recompute untaxed/tax/total from lines_json; fall back to bill header when lines omit qty×price."""
+    lines = json.loads(bill.lines_json or "[]")
+    untaxed = 0.0
+    tax = 0.0
+    for ln in lines:
+        amt = _line_net_amount(ln)
+        rate = float(ln.get("tax_rate") or 0)
+        line_tax = amt * (rate / 100.0) if rate else 0.0
+        untaxed += amt
+        tax += line_tax
+    untaxed = round(untaxed, 2)
+    tax = round(tax, 2)
+    total = round(untaxed + tax, 2)
+
+    header_total = float(bill.amount_total or 0)
+    header_tax = float(bill.amount_tax or 0)
+    header_untaxed = float(bill.amount_untaxed or 0)
+
+    if total <= 0 and header_total > 0:
+        total = round(header_total, 2)
+        tax = round(header_tax, 2)
+        untaxed = round(total - tax, 2)
+    elif untaxed <= 0 and header_total > header_tax:
+        total = round(header_total, 2)
+        tax = round(header_tax, 2)
+        untaxed = round(total - tax, 2)
+    elif total <= 0 and header_untaxed > 0:
+        untaxed = round(header_untaxed, 2)
+        tax = round(header_tax, 2)
+        total = round(untaxed + tax, 2)
+
+    if untaxed <= 0 and tax <= 0 and total > 0:
+        untaxed = total
+    return untaxed, tax, total
+
+
 async def _next_bill_name(db: AsyncSession, tenant_id: str, bill_date: date) -> str:
     prefix = f"BILL/{bill_date.year}/{bill_date.month:02d}/"
     result = await db.execute(
@@ -35,14 +79,13 @@ async def post_vendor_bill(db: AsyncSession, bill: VendorBill) -> AccMove:
     await ensure_default_chart(db, tenant_id=bill.tenant_id)
     fp = await resolve_fiscal_position(db, bill.tenant_id)
     vat_in_code = fp.vat_input_account or "1310"
-    lines = json.loads(bill.lines_json or "[]")
-    expense_total = 0.0
-    for ln in lines:
-        expense_total += float(ln.get("amount") or (float(ln.get("quantity") or 0) * float(ln.get("price_unit") or 0)))
 
-    untaxed = float(bill.amount_untaxed or expense_total)
-    tax = float(bill.amount_tax or 0)
-    total = float(bill.amount_total or untaxed + tax)
+    untaxed, tax, total = _amounts_from_bill_lines(bill)
+    bill.amount_untaxed = untaxed
+    bill.amount_tax = tax
+    bill.amount_total = total
+    if bill.state != "posted":
+        bill.amount_residual = total
 
     expense_code = "5100"
     move_lines = [
