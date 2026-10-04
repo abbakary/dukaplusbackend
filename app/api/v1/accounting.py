@@ -48,7 +48,16 @@ from app.services.accounting_reports import build_report_bundle
 from app.services.odoo_style_reports import REPORT_CATALOG, run_odoo_report
 from app.services.report_pdf_html import payload_to_body_html, render_report_html
 
-router = APIRouter(prefix="/tenant/accounting", tags=["accounting"], dependencies=[Depends(require_vendor_subscription)])
+
+async def _ensure_accounting_schema_dep(db: Annotated[AsyncSession, Depends(get_db)]) -> None:
+    await ensure_accounting_schema(db)
+
+
+router = APIRouter(
+    prefix="/tenant/accounting",
+    tags=["accounting"],
+    dependencies=[Depends(require_vendor_subscription), Depends(_ensure_accounting_schema_dep)],
+)
 
 
 class JournalLineIn(BaseModel):
@@ -571,7 +580,6 @@ async def list_vendor_bills(
     state: str | None = Query(None),
 ):
     tenant_id = require_tenant(user)
-    await ensure_accounting_schema(db)
     q = select(VendorBill).where(VendorBill.tenant_id == tenant_id).order_by(VendorBill.created_at.desc())
     if state:
         q = q.where(VendorBill.state == state)
@@ -589,7 +597,6 @@ async def create_vendor_bill(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
-    await ensure_accounting_schema(db)
     bill_date = body.bill_date or date.today()
     untaxed, tax, total, out_lines = _compute_bill_amounts(body.lines)
     bill = VendorBill(
