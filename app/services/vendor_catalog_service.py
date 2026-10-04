@@ -18,7 +18,7 @@ async def build_vendor_catalog(
     tenant_id: str,
     vendor_id: str | None,
     limit: int = 200,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], int]:
     by_key: dict[str, dict[str, Any]] = {}
 
     def upsert(
@@ -108,4 +108,12 @@ async def build_vendor_catalog(
         )
 
     out = sorted(by_key.values(), key=lambda x: x["name"].lower())
-    return out[:limit]
+    trimmed = out[:limit]
+    vendor_history_count = 0
+    for row in trimmed:
+        sources = row.get("sources") or []
+        from_vendor = "purchase_order" in sources or "vendor_bill" in sources
+        row["from_vendor_history"] = from_vendor
+        if from_vendor:
+            vendor_history_count += 1
+    return trimmed, vendor_history_count

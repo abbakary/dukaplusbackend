@@ -7,7 +7,9 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.branch_scope import branch_id_filter
 from app.models.accounting import AccFinancialReportLine, AccMove, AccMoveLine, LedgerAccount
+from app.services.branch_service import get_tenant_default_branch_id
 
 TZ_PNL_SEED = [
     ("root", None, 0, "Profit and Loss (TZ)", "sum", "", "", 1, "title"),
@@ -60,13 +62,18 @@ async def _balance_by_account(
     tenant_id: str,
     date_from: date,
     date_to: date,
+    branch_id: str | None = None,
 ) -> dict[str, float]:
     accounts = {a.id: a for a in (await db.execute(select(LedgerAccount).where(LedgerAccount.tenant_id == tenant_id))).scalars()}
+    hq_id = await get_tenant_default_branch_id(db, tenant_id) if branch_id else None
     q = (
         select(AccMoveLine, AccMove)
         .join(AccMove, AccMove.id == AccMoveLine.move_id)
         .where(AccMove.tenant_id == tenant_id, AccMove.state == "posted")
     )
+    clause = branch_id_filter(AccMove.branch_id, branch_id, hq_id)
+    if clause is not None:
+        q = q.where(clause)
     totals: dict[str, float] = {}
     for line, move in (await db.execute(q)).all():
         if move.date < date_from or move.date > date_to:
@@ -85,6 +92,7 @@ async def compute_financial_report(
     report_code: str,
     date_from: date,
     date_to: date,
+    branch_id: str | None = None,
 ) -> dict:
     await ensure_financial_report_template(db, tenant_id, report_code)
     if report_code == "balance_sheet":
@@ -98,7 +106,7 @@ async def compute_financial_report(
         )
     ).scalars().all()
     accounts = {a.code: a for a in (await db.execute(select(LedgerAccount).where(LedgerAccount.tenant_id == tenant_id))).scalars()}
-    balances = await _balance_by_account(db, tenant_id, date_from, date_to)
+    balances = await _balance_by_account(db, tenant_id, date_from, date_to, branch_id)
 
     def line_amount(row: AccFinancialReportLine) -> float:
         if row.line_type == "accounts":

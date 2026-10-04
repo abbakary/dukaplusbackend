@@ -129,6 +129,13 @@ async def _tenant_has_acc_moves(db: AsyncSession, tenant_id: str) -> bool:
     return row is not None
 
 
+def _financial_lines_total(fin: dict[str, Any] | None) -> float:
+    if not fin:
+        return 0.0
+    lines = fin.get("lines") or []
+    return sum(abs(float(l.get("amount") or 0)) for l in lines)
+
+
 async def run_odoo_report(
     db: AsyncSession,
     *,
@@ -150,25 +157,53 @@ async def run_odoo_report(
         "books_mode": books_mode,
     }
 
-    if report_key in ("profit_and_loss", "balance_sheet"):
-        if await _tenant_has_acc_moves(db, tenant_id):
+    if report_key in ("profit_and_loss", "balance_sheet", "cash_flow", "aged_receivable", "aged_payable", "tax_report"):
+        bundle = await build_report_bundle(
+            db,
+            tenant_id=tenant_id,
+            branch_id=branch_id,
+            books_mode=books_mode,
+            date_from=d_from,
+            date_to=d_to,
+        )
+        fin: dict[str, Any] | None = None
+        if report_key in ("profit_and_loss", "balance_sheet") and await _tenant_has_acc_moves(db, tenant_id):
             fin = await compute_financial_report(
                 db,
                 tenant_id=tenant_id,
                 report_code=report_key,
                 date_from=d_from,
                 date_to=d_to,
+                branch_id=branch_id,
             )
-            return {**meta, "type": "hierarchy", "data": fin, "lines": fin.get("lines", [])}
-
-    if report_key in ("profit_and_loss", "balance_sheet", "cash_flow", "aged_receivable", "aged_payable", "tax_report"):
-        bundle = await build_report_bundle(
-            db, tenant_id=tenant_id, branch_id=branch_id, books_mode=books_mode
-        )
         if report_key == "profit_and_loss":
-            return {**meta, "type": "hierarchy", "data": bundle["income_statement"]}
+            inc = bundle["income_statement"]
+            if fin and _financial_lines_total(fin) > 0.01:
+                return {
+                    **meta,
+                    "type": "hierarchy",
+                    "data": {**inc, **fin},
+                    "lines": fin.get("lines") or [],
+                    "source": "ledger",
+                }
+            return {
+                **meta,
+                "type": "hierarchy",
+                "data": inc,
+                "lines": inc.get("lines") or [],
+                "source": "operations",
+            }
         if report_key == "balance_sheet":
-            return {**meta, "type": "balance_sheet", "data": bundle["balance_sheet"]}
+            bs = bundle["balance_sheet"]
+            if fin and _financial_lines_total(fin) > 0.01:
+                return {
+                    **meta,
+                    "type": "hierarchy",
+                    "data": {**bs, **fin},
+                    "lines": fin.get("lines") or [],
+                    "source": "ledger",
+                }
+            return {**meta, "type": "balance_sheet", "data": bs, "source": "operations"}
         if report_key == "cash_flow":
             return {**meta, "type": "cash_flow", "data": bundle.get("cash_flow") or {}}
         if report_key == "aged_receivable":
@@ -321,7 +356,14 @@ async def run_odoo_report(
         return {**meta, "type": "journal_report", "entries": journals}
 
     if report_key == "partner_ledger":
-        bundle = await build_report_bundle(db, tenant_id=tenant_id, branch_id=branch_id, books_mode=books_mode)
+        bundle = await build_report_bundle(
+            db,
+            tenant_id=tenant_id,
+            branch_id=branch_id,
+            books_mode=books_mode,
+            date_from=d_from,
+            date_to=d_to,
+        )
         return {
             **meta,
             "type": "partner_ledger",
@@ -365,6 +407,22 @@ async def run_odoo_report(
 
     if report_key == "account_analysis":
         accounts = await ensure_default_chart(db, tenant_id)
+        use_moves = await _tenant_has_acc_moves(db, tenant_id)
+        if use_moves:
+            period_rows = await _acc_move_lines_query(
+                db, tenant_id, branch_id, d_from, d_to, target_move=target_move
+            )
+            by_type: dict[str, float] = {}
+            for line, _move, acct in period_rows:
+                by_type[acct.account_type] = by_type.get(acct.account_type, 0.0) + float(line.debit or 0) - float(
+                    line.credit or 0
+                )
+            return {
+                **meta,
+                "type": "account_analysis",
+                "by_account_type": [{"type": k, "net": round(v, 2)} for k, v in sorted(by_type.items())],
+                "account_count": len(accounts),
+            }
         period_rows = await _journal_lines_query(db, tenant_id, branch_id, d_from, d_to)
         by_type: dict[str, float] = {}
         for line, _entry, acct in period_rows:

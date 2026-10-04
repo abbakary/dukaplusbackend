@@ -40,6 +40,7 @@ from app.models.accounting import (
     SaleQuotation,
     VendorBill,
 )
+from app.services.db_schema_patches import ensure_accounting_schema
 from app.services.vendor_bill_service import post_vendor_bill, register_bill_payment
 from app.services.accounting_defaults import ensure_default_chart
 from app.services.accounting_posting import COMPLETED_SALE_STATUSES, post_sale_journal
@@ -559,8 +560,8 @@ async def vendor_product_catalog(
     vendor_id: str | None = Query(None),
 ):
     tenant_id = require_tenant(user)
-    items = await build_vendor_catalog(db, tenant_id=tenant_id, vendor_id=vendor_id)
-    return {"items": items}
+    items, vendor_history_count = await build_vendor_catalog(db, tenant_id=tenant_id, vendor_id=vendor_id)
+    return {"items": items, "vendor_history_count": vendor_history_count}
 
 
 @router.get("/bills")
@@ -570,6 +571,7 @@ async def list_vendor_bills(
     state: str | None = Query(None),
 ):
     tenant_id = require_tenant(user)
+    await ensure_accounting_schema(db)
     q = select(VendorBill).where(VendorBill.tenant_id == tenant_id).order_by(VendorBill.created_at.desc())
     if state:
         q = q.where(VendorBill.state == state)
@@ -587,6 +589,7 @@ async def create_vendor_bill(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     tenant_id = require_tenant(user)
+    await ensure_accounting_schema(db)
     bill_date = body.bill_date or date.today()
     untaxed, tax, total, out_lines = _compute_bill_amounts(body.lines)
     bill = VendorBill(

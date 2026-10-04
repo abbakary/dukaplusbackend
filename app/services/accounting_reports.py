@@ -66,17 +66,34 @@ def _sale_cogs(sale: Sale, cost_by_product: dict[str, float]) -> float:
     return round(total, 2)
 
 
+def _sale_on_date(sale: Sale, d_from: date | None, d_to: date | None) -> bool:
+    if d_from is None and d_to is None:
+        return True
+    created = sale.created_at
+    if not created:
+        return d_from is None
+    sd = created.date() if hasattr(created, "date") else created
+    if d_from is not None and sd < d_from:
+        return False
+    if d_to is not None and sd > d_to:
+        return False
+    return True
+
+
 async def build_report_bundle(
     db: AsyncSession,
     *,
     tenant_id: str,
     branch_id: str | None,
     books_mode: str = "standard",
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> dict:
     hq_id = await get_tenant_default_branch_id(db, tenant_id) if branch_id else None
     tra = books_mode == "tra"
 
-    sales = await _scoped_sales(db, tenant_id, branch_id, hq_id)
+    sales_all = await _scoped_sales(db, tenant_id, branch_id, hq_id)
+    sales = [s for s in sales_all if _sale_on_date(s, date_from, date_to)]
     products = await _scoped_products(db, tenant_id, branch_id, hq_id)
     customers = await _scoped_customers(db, tenant_id, branch_id, hq_id)
     purchase_orders = await _scoped_pos(db, tenant_id, branch_id, hq_id)
