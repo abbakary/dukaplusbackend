@@ -25,11 +25,14 @@ Set these on your **backend API service** (not on the Postgres service):
 
 ### Linking Postgres on Railway
 
-**This crash means `DATABASE_URL` is empty:**
+**This crash means `DATABASE_URL` is wrong:**
 
 ```
 Could not parse SQLAlchemy URL from string ''
+Could not parse SQLAlchemy URL from string '<Reference: Postgres → DATABASE_PRIVATE_URL>'
 ```
+
+You pasted **documentation placeholder text** instead of linking Postgres. The value must be a real URL like `postgresql://postgres:...@...railway.internal:5432/railway`, not angle brackets or “Add Reference” instructions.
 
 1. Open **dukaplusbackend** service (not Postgres) → **Variables**
 2. **Delete** any `DATABASE_URL` that is blank or shows `${{...}}` unresolved

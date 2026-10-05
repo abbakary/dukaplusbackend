@@ -98,6 +98,24 @@ class Settings(BaseSettings):
     def resolve_database_url(cls, v: object) -> str:
         return _fix_sqlite_url(_pick_database_url(v))
 
+    @staticmethod
+    def _looks_like_invalid_database_url(url: str) -> bool:
+        if not url:
+            return True
+        lower = url.lower()
+        if url.startswith("sqlite"):
+            return False
+        if lower.startswith("postgresql://") or lower.startswith("postgres://"):
+            return False
+        if "+asyncpg" in lower or "+psycopg" in lower:
+            return False
+        # Docs placeholders / unresolved Railway templates pasted as literal text
+        if "<reference" in lower or "database_private_url>" in lower:
+            return True
+        if url.startswith("${{") and url.endswith("}}"):
+            return True
+        return True
+
     @model_validator(mode="after")
     def validate_production_database(self) -> "Settings":
         url = self.database_url.strip()
@@ -107,6 +125,13 @@ class Settings(BaseSettings):
                 "In Railway → dukaplusbackend service → Variables → Add Reference → "
                 "select your Postgres service → DATABASE_PRIVATE_URL → name it DATABASE_URL. "
                 "Then redeploy."
+            )
+        if self.is_production and self._looks_like_invalid_database_url(url):
+            raise ValueError(
+                f"DATABASE_URL is not a real Postgres URL (got: {url[:80]!r}). "
+                "Do not paste placeholder text from docs. In Railway: open your API service → "
+                "Variables → delete DATABASE_URL → + New Variable → Add Reference → "
+                "Postgres service → DATABASE_PRIVATE_URL → name DATABASE_URL → redeploy."
             )
         return self
 
