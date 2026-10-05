@@ -9,8 +9,6 @@ from app.config import settings
 from app.core.security import hash_password
 from app.database import AsyncSessionLocal
 from app.models import User, UserRole
-from app.seed_sample_data import seed_login_aliases, seed_sample_data
-
 logger = logging.getLogger(__name__)
 
 
@@ -99,29 +97,7 @@ async def seed_demo_data() -> None:
         return
 
     if settings.seed_demo_data:
-        await seed_sample_data()
-        await seed_login_aliases()
-        try:
-            from app.seed_compliance_sample import seed_compliance_demo_for_sinza
+        from app.seed_portal_demo import seed_portal_demo
 
-            await seed_compliance_demo_for_sinza()
-        except Exception:
-            logger.exception("Compliance demo seed failed")
-        try:
-            from app.seed_sample_enrichment import enrich_sample_tenants
-
-            await enrich_sample_tenants()
-        except Exception:
-            logger.exception("Sample tenant enrichment failed")
-        try:
-            from app.seed_mega_hardware import ensure_mega_hardware_demo
-
-            await ensure_mega_hardware_demo()
-        except Exception:
-            logger.exception("Mega hardware demo seed failed")
-        try:
-            from app.seed_showcase_retail import ensure_showcase_retail_demo
-
-            await ensure_showcase_retail_demo()
-        except Exception:
-            logger.exception("Showcase retail demo seed failed")
+        await seed_portal_demo()
+        logger.info("Portal demo ensured (3 tenants @ portal.demo.dukaplus.co.tz)")

@@ -1,4 +1,4 @@
-"""VAT report from posted move lines (Zalongwa vat.report.wizard style)."""
+"""VAT report from posted move lines (output / input / net payable)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,10 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models import Sale
 from app.models.accounting import AccMove, AccMoveLine, LedgerAccount
+
+from app.services.accounting_reports import COMPLETED_SALE_STATUSES
 
 VAT_OUTPUT_CODES = frozenset({"2100"})
 VAT_INPUT_CODES = frozenset({"1310", "1300"})
@@ -65,8 +68,32 @@ async def build_vat_report(
                     }
                 )
 
+    sales_std = 0.0
+    sales_exempt = 0.0
+    sales_zero = 0.0
+    if abs(output) < 0.01 and abs(input_vat) < 0.01:
+        q = select(Sale).where(
+            Sale.tenant_id == tenant_id,
+            Sale.status.in_(tuple(COMPLETED_SALE_STATUSES)),
+        )
+        for sale in (await db.execute(q)).scalars().all():
+            if sale.created_at:
+                sd = sale.created_at.date()
+                if sd < date_from or sd > date_to:
+                    continue
+            vat = float(sale.vat_amount or 0)
+            total = float(sale.total or 0)
+            if vat > 0:
+                sales_std += total - vat
+                output += vat
+            elif total > 0:
+                sales_zero += total
+
     net_payable = round(output - input_vat, 2)
     rows = [
+        {"label_en": "Standard-rated sales (net)", "label_sw": "Mauzo ya kawaida (neto)", "amount": round(sales_std, 2)},
+        {"label_en": "Zero-rated sales", "label_sw": "Mauzo zero-rated", "amount": round(sales_zero, 2)},
+        {"label_en": "Exempt sales (est.)", "label_sw": "Mauzo yasiyo na VAT", "amount": round(sales_exempt, 2)},
         {"label_en": "Output VAT (sales)", "label_sw": "VAT mauzo", "amount": round(output, 2)},
         {"label_en": "Input VAT (purchases)", "label_sw": "VAT manunuzi", "amount": round(input_vat, 2)},
         {"label_en": "Net VAT payable", "label_sw": "VAT neto kulipa", "amount": net_payable},

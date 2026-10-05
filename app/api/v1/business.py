@@ -7,6 +7,7 @@ from typing import Annotated
 
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from sqlalchemy import func, select
 
@@ -67,10 +68,11 @@ from app.services.analytics_service import build_analytics_snapshot
 from app.services.branch_service import get_tenant_default_branch_id
 from app.services.refund_service import apply_sale_refund
 from app.services.transaction_service import create_sale_transaction, finalize_sale_transaction
-
-
-
 router = APIRouter(tags=["business"], dependencies=[Depends(require_vendor_subscription)])
+
+from app.api.v1.product_import import router as product_import_router
+
+router.include_router(product_import_router)
 
 
 
@@ -357,7 +359,6 @@ async def dashboard_stats(
 
 
 # ── Products ──────────────────────────────────────────────────────────────────
-
 
 
 @router.get("/products", response_model=PaginatedProducts)
@@ -881,7 +882,11 @@ async def adjust_stock(
         raise HTTPException(status_code=400, detail="Stock cannot go negative")
 
     if body.unit_cost is not None and body.unit_cost > 0:
-        product.cost = body.unit_cost
+        if body.quantity > 0 and prev > 0:
+            blended = ((prev * float(product.cost or 0)) + (body.quantity * body.unit_cost)) / (prev + body.quantity)
+            product.cost = round(max(blended, 0.01), 2)
+        else:
+            product.cost = body.unit_cost
 
     if body.batch_number:
         product.batch_number = body.batch_number
@@ -1156,5 +1161,4 @@ async def sync_batch(
         server_timestamp=datetime.now(UTC),
 
     )
-
 

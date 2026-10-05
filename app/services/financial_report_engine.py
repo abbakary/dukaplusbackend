@@ -1,4 +1,4 @@
-"""Odoo account.financial.report style hierarchy (TZ retail template)."""
+"""Financial statement hierarchy (TZ retail template)."""
 
 from __future__ import annotations
 
@@ -15,14 +15,16 @@ TZ_PNL_SEED = [
     ("root", None, 0, "Profit and Loss (TZ)", "sum", "", "", 1, "title"),
     ("rev", "root", 1, "Revenue", "account_type", "", "income", 1, "section"),
     ("cogs", "root", 2, "Cost of goods sold", "account_type", "", "expense", -1, "normal"),
-    ("opex", "root", 3, "Operating expenses", "accounts", "6000,6100,6200,6300,5100", "", 1, "normal"),
+    ("opex", "root", 3, "Operating expenses", "accounts", "6000,6100,6200,6300", "", 1, "normal"),
     ("net", "root", 99, "Net profit", "sum", "", "", 1, "total"),
 ]
 
 TZ_BS_SEED = [
     ("root", None, 0, "Balance Sheet (TZ)", "sum", "", "", 1, "title"),
-    ("assets", "root", 1, "Assets", "account_type", "", "asset", 1, "section"),
-    ("liab", "root", 2, "Liabilities", "account_type", "", "liability", -1, "section"),
+    ("assets", "root", 1, "Assets", "sum", "", "", 1, "section"),
+    ("assets_cur", "assets", 1, "Current assets", "accounts", "1000,1100,1200,1300,1310", "", 1, "normal"),
+    ("liab", "root", 2, "Liabilities", "sum", "", "", -1, "section"),
+    ("liab_cur", "liab", 1, "Current liabilities", "accounts", "2000,2100,2200", "", -1, "normal"),
     ("equity", "root", 3, "Equity", "account_type", "", "equity", -1, "section"),
 ]
 
@@ -122,18 +124,48 @@ async def compute_financial_report(
             return s * row.sign
         return 0.0
 
+    raw_amount: dict[str, float] = {}
+    children_of: dict[str | None, list[str]] = {}
+    for row in lines:
+        children_of.setdefault(row.parent_id, []).append(row.id)
+        if row.line_type != "sum":
+            raw_amount[row.id] = line_amount(row)
+        elif row.name.startswith("Net"):
+            raw_amount[row.id] = sum(line_amount(r) for r in lines if r.line_type != "sum")
+        else:
+            raw_amount[row.id] = 0.0
+
+    def sum_children(line_id: str) -> float:
+        total = 0.0
+        for cid in children_of.get(line_id, []):
+            child = next((r for r in lines if r.id == cid), None)
+            if not child:
+                continue
+            if child.line_type == "sum":
+                total += sum_children(cid)
+            else:
+                total += raw_amount.get(cid, 0.0)
+        return total
+
+    for row in lines:
+        if row.line_type == "sum" and not row.name.startswith("Net"):
+            raw_amount[row.id] = sum_children(row.id)
+
     out_lines = []
     for row in lines:
-        amt = line_amount(row) if row.line_type != "sum" else 0.0
-        if row.line_type == "sum" and row.name.startswith("Net"):
-            amt = sum(line_amount(r) for r in lines if r.line_type != "sum")
+        depth = 0
+        pid = row.parent_id
+        while pid:
+            depth += 1
+            parent = next((r for r in lines if r.id == pid), None)
+            pid = parent.parent_id if parent else None
         out_lines.append(
             {
                 "id": row.id,
                 "name": row.name,
-                "level": 1 if row.parent_id else 0,
+                "level": depth,
                 "style": row.style,
-                "amount": round(amt, 2),
+                "amount": round(raw_amount.get(row.id, 0.0), 2),
                 "line_type": row.line_type,
             }
         )

@@ -43,7 +43,7 @@ from app.models.accounting import (
     VendorBill,
 )
 from app.services.db_schema_patches import ensure_accounting_schema
-from app.services.acc_posting_service import AccPostingError
+from app.services.acc_posting_service import AccPostingError, MoveLineIn, post_move
 from app.services.vendor_bill_service import post_vendor_bill, register_bill_payment
 from app.services.accounting_defaults import ensure_default_chart
 from app.services.accounting_posting import COMPLETED_SALE_STATUSES, post_sale_journal
@@ -170,6 +170,7 @@ async def create_entry(
     db.add(entry)
     await db.flush()
 
+    move_lines: list[MoveLineIn] = []
     for line in body.lines:
         acct = by_code.get(line.account_code)
         if not acct:
@@ -183,6 +184,30 @@ async def create_entry(
                 credit=line.credit,
             )
         )
+        move_lines.append(
+            MoveLineIn(
+                line.account_code,
+                line.label or entry.reference,
+                debit=float(line.debit or 0),
+                credit=float(line.credit or 0),
+            )
+        )
+    await post_move(
+        db,
+        tenant_id=tenant_id,
+        branch_id=body.branch_id,
+        journal_code="GEN",
+        move_type="entry",
+        move_date=body.entry_date,
+        partner_id=None,
+        partner_name="",
+        ref=entry.reference.strip(),
+        narration=entry.memo.strip(),
+        lines=move_lines,
+        source_type="manual",
+        source_id=entry.id,
+        mirror_journal=False,
+    )
     await db.flush()
     return {"id": entry.id, "reference": entry.reference}
 
@@ -288,10 +313,10 @@ async def accounting_run_report_pdf(
     catalog = next((r for r in REPORT_CATALOG if r["key"] == report_key), None)
     title = (catalog or {}).get("name_en") or report_key.replace("_", " ").title()
     body = payload_to_body_html(payload)
-    filters_html = (
-        f'<div class="meta" style="margin-bottom:12px"><em>Filters (Zalongwa-style): '
-        f'posted moves · books {books_mode} · branch {effective_branch or "all"}</em></div>'
-    )
+    address_lines: list[str] = []
+    if tenant:
+        if tenant.district or tenant.region:
+            address_lines.append(", ".join(x for x in [tenant.district, tenant.region] if x))
     html = render_report_html(
         business_name=business_name,
         report_title=title,
@@ -299,9 +324,12 @@ async def accounting_run_report_pdf(
             "date_from": payload.get("date_from"),
             "date_to": payload.get("date_to"),
             "target_move": payload.get("target_move"),
-            "filters_html": filters_html,
+            "books_mode": books_mode,
+            "branch_id": effective_branch,
         },
         body_html=body,
+        tax_id=getattr(tenant, "tin_number", None) if tenant else None,
+        address_lines=address_lines or None,
     )
     return HTMLResponse(content=html)
 
@@ -366,7 +394,7 @@ class VendorBillLineIn(BaseModel):
     product_name: str = ""
     sku: str = ""
     unit: str = "pcs"
-    account_code: str = "5100"
+    account_code: str = "6000"
     quantity: float = 1
     price_unit: float = 0
     tax_rate: float = 0

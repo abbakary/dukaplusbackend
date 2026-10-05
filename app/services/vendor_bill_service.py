@@ -87,15 +87,38 @@ async def post_vendor_bill(db: AsyncSession, bill: VendorBill) -> AccMove:
     if bill.state != "posted":
         bill.amount_residual = total
 
-    expense_code = "5100"
+    lines = json.loads(bill.lines_json or "[]")
+    expense_by_code: dict[str, float] = {}
+    for ln in lines:
+        amt = _line_net_amount(ln)
+        if amt <= 0:
+            continue
+        code = str(ln.get("account_code") or ln.get("expense_account") or "").strip()
+        if not code or code == "5100":
+            cat = str(ln.get("category") or ln.get("expense_type") or "").lower()
+            if cat in ("rent", "utilities", "utility"):
+                code = "6100"
+            elif cat in ("payroll", "salary", "salaries", "wages"):
+                code = "6200"
+            elif cat in ("marketing", "advertising"):
+                code = "6300"
+            elif ln.get("product_id"):
+                code = "1300"
+            else:
+                code = "6000"
+        expense_by_code[code] = expense_by_code.get(code, 0.0) + amt
+    if not expense_by_code:
+        expense_by_code["6000"] = untaxed
+
     move_lines = [
         MoveLineIn(
-            expense_code,
+            code,
             bill.vendor_name or "Expense",
-            debit=untaxed,
+            debit=round(amount, 2),
             partner_id=bill.vendor_id,
             partner_name=bill.vendor_name or "",
-        ),
+        )
+        for code, amount in sorted(expense_by_code.items())
     ]
     if tax > 0:
         move_lines.append(MoveLineIn(vat_in_code, "VAT Input", debit=tax, display_type="tax"))

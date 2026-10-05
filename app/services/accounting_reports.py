@@ -316,11 +316,32 @@ async def build_report_bundle(
             }
         )
 
+    operating = round(net + receivables * 0.02 - payables * 0.01, 2)
+    investing = round(-inventory * 0.05, 2)
+    financing = round(equity * 0.02, 2)
+    net_change = round(operating + investing + financing, 2)
+    cash_closing = cash
+    cash_opening = round(cash_closing - net_change, 2)
     cashflow = {
-        "operating": net + vat_output * 0.1,
-        "investing": -inventory * 0.05,
-        "financing": equity * 0.02,
-        "net_change": net,
+        "operating": operating,
+        "investing": investing,
+        "financing": financing,
+        "net_change": net_change,
+        "cash_opening": cash_opening,
+        "cash_closing": cash_closing,
+        "lines": {
+            "operating": [
+                {"label_en": "Net profit (operating)", "label_sw": "Faida halisi", "amount": net},
+                {"label_en": "Change in receivables (est.)", "label_sw": "Mabadiliko madeni wateja", "amount": round(receivables * -0.02, 2)},
+                {"label_en": "Change in payables (est.)", "label_sw": "Mabadiliko madeni wasambazaji", "amount": round(payables * 0.01, 2)},
+            ],
+            "investing": [
+                {"label_en": "Inventory movement (est.)", "label_sw": "Mabadiliko stoo", "amount": investing},
+            ],
+            "financing": [
+                {"label_en": "Owner / equity movements (est.)", "label_sw": "Mabadiliko mtaji", "amount": financing},
+            ],
+        },
     }
 
     return {

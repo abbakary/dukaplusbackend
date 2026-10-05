@@ -116,6 +116,15 @@ def ai_retail_product_image_url(product_name: str, sku: str, variant: int = 0) -
     return f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=512&height=512&seed={seed}&nologo=true"
 
 
+def portal_ai_product_image(business_type: BusinessType, product_name: str, sku: str, variant: int = 0) -> str:
+    """Pollinations AI catalog image — stable per SKU, tuned by business type."""
+    if business_type == BusinessType.pharmacy:
+        return ai_pharmacy_product_image_url(product_name, sku, variant)
+    if business_type in (BusinessType.hardware, BusinessType.electronics, BusinessType.auto_parts):
+        return ai_product_image_url(product_name, sku, variant)
+    return ai_retail_product_image_url(product_name, sku, variant)
+
+
 def product_image_url(
     business_type: BusinessType,
     product_key: str,
@@ -125,7 +134,7 @@ def product_image_url(
     use_ai: bool = False,
 ) -> str:
     if use_ai and product_name:
-        return ai_product_image_url(product_name, product_key, variant)
+        return portal_ai_product_image(business_type, product_name, product_key, variant)
     pool = _PRODUCT_PHOTOS.get(business_type) or _DEFAULT_PRODUCT_PHOTOS
     key = f"{business_type.value}:{product_key}:{variant}"
     return _pick(pool, key)

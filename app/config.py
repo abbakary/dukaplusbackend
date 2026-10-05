@@ -110,6 +110,16 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def normalize_dev_super_admin_password(self) -> "Settings":
+        """Local dev: .env.example placeholder is not a usable login password."""
+        if (
+            self.environment.lower() not in {"production", "prod"}
+            and self.super_admin_password.strip() == "change-me-in-production"
+        ):
+            object.__setattr__(self, "super_admin_password", "admin123")
+        return self
+
     @property
     def async_database_url(self) -> str:
         url, _ = normalize_database_url(self.database_url)

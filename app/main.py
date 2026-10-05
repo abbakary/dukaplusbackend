@@ -27,7 +27,8 @@ from app.api.v1 import (
     pharmacy,
 )
 from app.config import settings
-from app.database import init_db
+from app.database import engine, init_db
+from app.startup_schema import run_startup_schema_patches
 from app.health import check_database, get_system_status
 from app.branch_backfill_migration import backfill_branch_ids
 from app.payroll_profile_migration import migrate_payroll_contract_profile_column
@@ -48,6 +49,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await run_startup_schema_patches(engine)
     await migrate_plan_tier_enum()
     await migrate_customer_branch_column()
     await migrate_operational_branch_columns()
@@ -59,7 +61,8 @@ async def lifespan(app: FastAPI):
         await seed_demo_data()
     except Exception:
         logger.exception("Startup seed failed")
-        raise
+        if settings.is_production:
+            raise
     await seed_platform_plans()
     if settings.seed_demo_data:
         await seed_provider_data()

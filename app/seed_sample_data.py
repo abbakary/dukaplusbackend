@@ -305,6 +305,11 @@ async def _already_seeded(db) -> bool:
     return (result.scalar() or 0) >= len(TENANT_SPECS)
 
 
+async def _user_with_email_exists(db, email: str) -> bool:
+    row = await db.execute(select(User.id).where(User.email == email))
+    return row.scalar_one_or_none() is not None
+
+
 async def seed_sample_data() -> None:
     """Insert 20 demo tenants with products, customers, sales, staff users, etc."""
     async with AsyncSessionLocal() as db:
@@ -322,6 +327,10 @@ async def seed_sample_data() -> None:
             biz_type: BusinessType = spec["type"]
             owner_name: str = spec["owner"]
             owner_email = _email(f"owner.{slug}")
+
+            existing_tenant = await db.execute(select(Tenant.id).where(Tenant.owner_email == owner_email))
+            if existing_tenant.scalar_one_or_none():
+                continue
 
             tenant = Tenant(
                 name=spec["name"],
@@ -370,16 +379,18 @@ async def seed_sample_data() -> None:
             db.add(owner_staff)
             await db.flush()
 
-            owner_user = User(
-                email=owner_email,
-                hashed_password=hashed,
-                name=owner_name,
-                phone=_phone(10000000 + idx),
-                role=UserRole.vendor_owner,
-                tenant_id=tenant.id,
-                staff_id=owner_staff.id,
-            )
-            db.add(owner_user)
+            if not await _user_with_email_exists(db, owner_email):
+                db.add(
+                    User(
+                        email=owner_email,
+                        hashed_password=hashed,
+                        name=owner_name,
+                        phone=_phone(10000000 + idx),
+                        role=UserRole.vendor_owner,
+                        tenant_id=tenant.id,
+                        staff_id=owner_staff.id,
+                    )
+                )
 
             staff_roles_to_add = [StaffRole.manager, StaffRole.cashier]
             if biz_type == BusinessType.pharmacy:
@@ -403,18 +414,22 @@ async def seed_sample_data() -> None:
                     role=staff_role,
                     permissions=staff_perms,
                 )
+                if await _user_with_email_exists(db, staff_email):
+                    continue
                 db.add(staff_member)
                 await db.flush()
 
-                db.add(User(
-                    email=staff_email,
-                    hashed_password=hashed,
-                    name=staff_member.name,
-                    phone=staff_member.phone,
-                    role=UserRole.vendor_staff,
-                    tenant_id=tenant.id,
-                    staff_id=staff_member.id,
-                ))
+                db.add(
+                    User(
+                        email=staff_email,
+                        hashed_password=hashed,
+                        name=staff_member.name,
+                        phone=staff_member.phone,
+                        role=UserRole.vendor_staff,
+                        tenant_id=tenant.id,
+                        staff_id=staff_member.id,
+                    )
+                )
 
             catalog = PRODUCT_CATALOG.get(biz_type, PRODUCT_CATALOG[BusinessType.retail])
             products: list[Product] = []
