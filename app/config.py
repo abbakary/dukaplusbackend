@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     super_admin_phone: str = "+255700000001"
     super_admin_sync_password: bool = True
 
+    @field_validator("environment", mode="before")
+    @classmethod
+    def default_environment_on_railway(cls, v: object) -> str:
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+        if os.environ.get("RAILWAY_ENVIRONMENT", "").strip().lower() in {"production", "prod"}:
+            return "production"
+        return "development"
+
     @field_validator("database_url", mode="before")
     @classmethod
     def resolve_database_url(cls, v: object) -> str:

@@ -237,9 +237,15 @@
 
         document.getElementById('api-status').textContent = data.checks?.api?.status === 'ok' ? 'Online' : 'Error';
         document.getElementById('db-status').textContent = data.checks?.database?.status === 'ok' ? 'Connected' : 'Error';
-        document.getElementById('db-latency').textContent = data.checks?.database?.latency_ms != null
-          ? 'Latency ' + data.checks.database.latency_ms + ' ms · ' + (data.checks.database.engine || 'db')
+        const engine = data.checks?.database?.engine || 'db';
+        let dbSub = data.checks?.database?.latency_ms != null
+          ? 'Latency ' + data.checks.database.latency_ms + ' ms · ' + engine
           : (data.checks?.database?.message || 'Unavailable');
+        if (engine === 'sqlite' && location.hostname.includes('railway.app')) {
+          dbSub += ' — WARNING: not Railway Postgres; shop signups stay in container SQLite only';
+          document.getElementById('db-status').textContent = 'SQLite (wrong for prod)';
+        }
+        document.getElementById('db-latency').textContent = dbSub;
         document.getElementById('env-name').textContent = data.environment || '—';
         document.getElementById('app-version').textContent = (data.app || 'Duka+ API') + ' v' + (data.version || '—');
         document.getElementById('tenant-count').textContent = data.checks?.database?.tenant_count ?? '—';
