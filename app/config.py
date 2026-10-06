@@ -68,11 +68,13 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173,"
         "https://dukaplusapp.vercel.app,https://dukalangu-red.vercel.app,"
         "https://dukalangu.vercel.app,https://duka-ys3r.vercel.app,"
-        "https://duka-1okz.vercel.app"
+        "https://duka-1okz.vercel.app,"
+        "https://www.dukadigital.co.tz,https://dukadigital.co.tz"
     )
-    # Any *.vercel.app preview/production deploy (Starlette fullmatch).
+    # *.vercel.app, local dev, and Duka Digital production (cPanel).
     cors_origin_regex: str = (
         r"^https://[\w.-]+\.vercel\.app$|"
+        r"^https://([\w.-]+\.)?dukadigital\.co\.tz$|"
         r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
     )
     gemini_api_key: str = ""
