@@ -31,6 +31,17 @@ def extract_payroll_profile(raw: dict[str, Any] | None) -> dict[str, Any] | None
     return profile if isinstance(profile, dict) else None
 
 
+def merge_role_permissions(role_key: str, stored: dict[str, Any] | None) -> dict[str, bool]:
+    """Role defaults with explicit RBAC overrides from staff.permissions."""
+    from app.core.security import DEFAULT_PERMISSIONS
+
+    defaults = dict(DEFAULT_PERMISSIONS.get(role_key, DEFAULT_PERMISSIONS["Cashier"]))
+    overrides = sanitize_rbac_permissions(stored)
+    if not overrides:
+        return defaults
+    return {**defaults, **overrides}
+
+
 def sanitize_rbac_permissions(raw: dict[str, Any] | None) -> dict[str, bool]:
     """Return bool permission flags safe for UserResponse.permissions."""
     if not raw:

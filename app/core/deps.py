@@ -87,24 +87,21 @@ def require_tenant(user: User) -> str:
 
 
 def get_user_permissions(user: User) -> dict[str, bool]:
-    from app.core.staff_permissions import sanitize_rbac_permissions
+    from app.core.staff_permissions import merge_role_permissions
 
     if user.role == UserRole.super_admin:
         return {k: True for k in [
-            "canSellPOS", "canGiveCredit", "canModifyInventory", "canViewProfitReports",
-            "canManageSuppliers", "canApproveDiscounts", "canOverridePrices", "canVoidReceipts",
-            "canPerformDailyClosing", "canAccessSuperAdmin",
+            "canSellPOS", "canGiveCredit", "canModifyInventory", "canViewInventory",
+            "canViewProfitReports", "canManageSuppliers", "canApproveDiscounts",
+            "canOverridePrices", "canVoidReceipts", "canPerformDailyClosing", "canAccessSuperAdmin",
         ]}
     if user.role == UserRole.vendor_owner:
         from app.core.security import DEFAULT_PERMISSIONS
-        return DEFAULT_PERMISSIONS["Owner"]
-    if user.staff and user.staff.permissions:
-        return sanitize_rbac_permissions(user.staff.permissions)
+        return dict(DEFAULT_PERMISSIONS["Owner"])
     if user.staff:
-        from app.core.security import DEFAULT_PERMISSIONS
-        return DEFAULT_PERMISSIONS.get(user.staff.role.value, DEFAULT_PERMISSIONS["Cashier"])
+        return merge_role_permissions(user.staff.role.value, user.staff.permissions)
     from app.core.security import DEFAULT_PERMISSIONS
-    return DEFAULT_PERMISSIONS["Owner"]
+    return dict(DEFAULT_PERMISSIONS["Owner"])
 
 
 def require_permission(permission: str):
