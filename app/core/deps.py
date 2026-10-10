@@ -87,6 +87,8 @@ def require_tenant(user: User) -> str:
 
 
 def get_user_permissions(user: User) -> dict[str, bool]:
+    from app.core.staff_permissions import sanitize_rbac_permissions
+
     if user.role == UserRole.super_admin:
         return {k: True for k in [
             "canSellPOS", "canGiveCredit", "canModifyInventory", "canViewProfitReports",
@@ -97,7 +99,7 @@ def get_user_permissions(user: User) -> dict[str, bool]:
         from app.core.security import DEFAULT_PERMISSIONS
         return DEFAULT_PERMISSIONS["Owner"]
     if user.staff and user.staff.permissions:
-        return user.staff.permissions
+        return sanitize_rbac_permissions(user.staff.permissions)
     if user.staff:
         from app.core.security import DEFAULT_PERMISSIONS
         return DEFAULT_PERMISSIONS.get(user.staff.role.value, DEFAULT_PERMISSIONS["Cashier"])

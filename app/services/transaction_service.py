@@ -195,7 +195,9 @@ async def create_sale_transaction(
         apply_vat=body.apply_vat,
     )
     sale_branch_id = await resolve_sale_branch_id(db, user, tenant_id, body.branch_id)
-    receipt = f"RCP-{datetime.now(UTC).strftime('%Y%m%d')}-{secrets.token_hex(3).upper()}"
+    receipt_raw = (body.receipt_number or "").strip()
+    receipt = receipt_raw if receipt_raw else f"RCP-{datetime.now(UTC).strftime('%Y%m%d')}-{secrets.token_hex(3).upper()}"
+    tra_sig = (body.tra_efd_signature or "").strip() or None
     status = resolve_sale_status(
         finalize=should_finalize,
         balance=totals["balance_remaining"],
@@ -238,7 +240,7 @@ async def create_sale_transaction(
         sale_type=body.sale_type,
         cashier_name=user.name,
         cashier_id=user.id,
-        tra_efd_signature=f"TRA-EFD-{secrets.token_hex(8).upper()}" if should_finalize else None,
+        tra_efd_signature=tra_sig if should_finalize else None,
         status=status,
         client_id=body.client_id,
         synced=True,
@@ -324,8 +326,6 @@ async def finalize_sale_transaction(
             customer.balance += totals["balance_remaining"]
 
     sale.status = "completed" if totals["balance_remaining"] == 0 else "pending_credit"
-    if not sale.tra_efd_signature:
-        sale.tra_efd_signature = f"TRA-EFD-{secrets.token_hex(8).upper()}"
     await db.flush()
     if sale.status in COMPLETED_STATUSES:
         from app.services.accounting_posting import post_sale_journal

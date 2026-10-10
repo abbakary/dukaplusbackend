@@ -677,7 +677,16 @@ async def update_staff(
         existing_avatar = (staff.permissions or {}).get("avatar_url")
         if existing_avatar and "avatar_url" not in merged:
             merged["avatar_url"] = existing_avatar
-        staff.permissions = merged
+        from app.core.staff_permissions import (
+            extract_payroll_profile,
+            normalize_staff_permissions_blob,
+            upsert_payroll_contract_from_profile,
+        )
+
+        payroll = extract_payroll_profile(merged)
+        if payroll:
+            await upsert_payroll_contract_from_profile(db, staff, payroll)
+        staff.permissions = normalize_staff_permissions_blob(merged)
     for k, v in data.items():
         setattr(staff, k, v)
     await db.flush()

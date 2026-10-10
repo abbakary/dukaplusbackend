@@ -298,6 +298,8 @@ class SaleCreate(BaseModel):
     branch_id: str | None = None
     client_id: str | None = None
     finalize: bool = True
+    receipt_number: str | None = None
+    tra_efd_signature: str | None = None
     # Client/POS totals — when set (incl. vat_amount=0), backend must respect them
     subtotal: float | None = None
     discount_amount: float | None = None
