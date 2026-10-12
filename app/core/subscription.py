@@ -110,3 +110,75 @@ def subscription_status_message(tenant: Tenant) -> str:
     if tenant.status == TenantStatus.grace_period and past is not None:
         return f"Grace period — {max(0, g - past)} day(s) remaining. Please upgrade."
     return "Active"
+
+
+async def subscription_block_detail(tenant: Tenant, db) -> dict:
+    """Structured 403 payload for login and API — includes Lipa / WhatsApp payment steps."""
+    from app.services.platform_billing import get_billing_settings
+
+    billing = await get_billing_settings(db)
+    lipa_num = billing.get("lipa_number", "0650124656")
+    lipa_name = billing.get("lipa_name", "DUKAPLUS")
+    lipa = f"{lipa_num} ({lipa_name})"
+    wa = billing.get("whatsapp_number", lipa_num)
+    note_en = billing.get("support_note_en") or ""
+    note_sw = billing.get("support_note_sw") or ""
+
+    past = days_past_expiry(tenant)
+    g = grace_days()
+
+    if tenant.status == TenantStatus.suspended:
+        title_en = "Account access is blocked"
+        title_sw = "Huduma imezuiwa"
+        message_en = (
+            f"{title_en}. Your shop subscription is not active. "
+            f"Pay via M-Pesa Lipa Namba {lipa}, then send your business name and payment reference "
+            f"on WhatsApp {wa} to restore access. {note_en}".strip()
+        )
+        message_sw = (
+            f"{title_sw}. Usajili wa duka hauko hai. "
+            f"Lipia kupitia Lipa Namba {lipa}, kisha tuma jina la biashara na kumbukumbu ya M-Pesa "
+            f"kwenye WhatsApp {wa} ili kufunguliwa tena. {note_sw}".strip()
+        )
+    elif past is not None and past > g:
+        message_en = (
+            f"Your free trial or subscription has expired. Pay via Lipa {lipa}, "
+            f"then WhatsApp {wa} with your M-Pesa reference to continue using POS and reports. {note_en}"
+        ).strip()
+        message_sw = (
+            f"Jaribio la bure au usajili umeisha. Lipia Lipa {lipa}, "
+            f"kisha WhatsApp {wa} na kumbukumbu ya M-Pesa ili kuendelea kutumia POS na ripoti. {note_sw}"
+        ).strip()
+    else:
+        message_en = subscription_status_message(tenant)
+        message_sw = message_en
+
+    return {
+        "code": "subscription_required",
+        "message": message_en,
+        "message_sw": message_sw,
+        "status": tenant.status.value,
+        "lipa_number": lipa_num,
+        "lipa_name": lipa_name,
+        "whatsapp_number": wa,
+        "support_note_en": note_en,
+        "support_note_sw": note_sw,
+    }
+
+
+async def ensure_vendor_may_authenticate(user, tenant: Tenant | None, db) -> None:
+    """Raise HTTP 403 when vendor/staff must not receive new tokens (unpaid / suspended)."""
+    from fastapi import HTTPException, status
+    from app.models import UserRole
+
+    if user.role == UserRole.super_admin or tenant is None:
+        return
+    await sync_tenant_subscription_state(tenant, db)
+    if subscription_allows_api_access(tenant):
+        return
+    # Persist auto-suspended / grace transitions before rejecting login.
+    await db.commit()
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=await subscription_block_detail(tenant, db),
+    )

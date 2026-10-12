@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.security import decode_token
-from app.core.subscription import subscription_allows_api_access, subscription_status_message, sync_tenant_subscription_state
+from app.core.subscription import (
+    subscription_allows_api_access,
+    subscription_block_detail,
+    sync_tenant_subscription_state,
+)
 from app.database import get_db
 from app.models import StaffMember, StaffRole, User, UserRole
 
@@ -63,11 +67,7 @@ async def require_vendor_subscription(
     if not subscription_allows_api_access(tenant):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "subscription_required",
-                "message": subscription_status_message(tenant),
-                "status": tenant.status.value,
-            },
+            detail=await subscription_block_detail(tenant, db),
         )
     return user
 

@@ -6,14 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.branch_scope import is_tenant_wide_access
-from app.core.deps import get_current_user, get_user_permissions
-from app.core.subscription import sync_tenant_subscription_state, subscription_status_message
+from app.core.deps import get_current_user, get_user_permissions, require_vendor_subscription
+from app.core.subscription import ensure_vendor_may_authenticate
 from sqlalchemy import or_, select
+from sqlalchemy.orm import selectinload
 
 from app.core.security import (
     create_access_token,
     create_refresh_token_value,
-    get_user_by_email,
     revoke_refresh_token,
     store_refresh_token,
     verify_password,
@@ -92,15 +92,16 @@ def _build_user_response(user: User) -> UserResponse:
 
 async def _resolve_login_user(db: AsyncSession, identifier: str) -> User | None:
     ident = identifier.strip()
+    stmt = select(User).options(selectinload(User.tenant))
     if "@" in ident:
-        return await get_user_by_email(db, ident.lower())
-    phone = normalize_tz_mobile_e164(ident)
-    if not phone:
-        return None
-    digits = phone.replace("+255", "")
-    alt_local = f"0{digits}"
-    result = await db.execute(
-        select(User).where(
+        stmt = stmt.where(User.email == ident.lower())
+    else:
+        phone = normalize_tz_mobile_e164(ident)
+        if not phone:
+            return None
+        digits = phone.replace("+255", "")
+        alt_local = f"0{digits}"
+        stmt = stmt.where(
             or_(
                 User.phone == phone,
                 User.phone == digits,
@@ -108,7 +109,7 @@ async def _resolve_login_user(db: AsyncSession, identifier: str) -> User | None:
                 User.phone == f"+255 {digits[:3]} {digits[3:6]} {digits[6:]}",
             )
         )
-    )
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -121,7 +122,7 @@ async def login(body: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)]
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
 
     if user.tenant_id and user.tenant:
-        await sync_tenant_subscription_state(user.tenant, db)
+        await ensure_vendor_may_authenticate(user, user.tenant, db)
 
     user.last_login = datetime.now(UTC)
     access = create_access_token({"sub": user.id, "role": user.role.value, "tenant_id": user.tenant_id})
@@ -172,6 +173,9 @@ async def refresh_token(body: RefreshRequest, db: Annotated[AsyncSession, Depend
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
+    if user.tenant_id and user.tenant:
+        await ensure_vendor_may_authenticate(user, user.tenant, db)
+
     matched.revoked = True
     access = create_access_token({"sub": user.id, "role": user.role.value, "tenant_id": user.tenant_id})
     refresh_val = create_refresh_token_value()
@@ -195,5 +199,5 @@ async def logout(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(user: Annotated[User, Depends(get_current_user)]):
+async def get_me(user: Annotated[User, Depends(require_vendor_subscription)]):
     return _build_user_response(user)
