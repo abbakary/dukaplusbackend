@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.branch_scope import is_tenant_wide_access
-from app.core.deps import get_current_user, get_user_permissions, require_vendor_subscription
+from app.core.deps import get_current_user, get_user_permissions
 from app.core.subscription import ensure_vendor_may_authenticate
 from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
@@ -199,5 +199,6 @@ async def logout(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(user: Annotated[User, Depends(require_vendor_subscription)]):
+async def get_me(user: Annotated[User, Depends(get_current_user)]):
+    """Profile always readable so clients can show subscription/pending states."""
     return _build_user_response(user)
