@@ -213,16 +213,16 @@ class CheckoutMethodsIn(BaseModel):
     phone_number: str
 
 
-class CheckoutMethodsOut(BaseModel):
-    amount_tzs: int
-    active_methods: list[CheckoutMethodOut]
-    detected_provider: str | None = None
-
-
 class CheckoutMethodOut(BaseModel):
     name: str
     status: str
     fee: int | None = None
+
+
+class CheckoutMethodsOut(BaseModel):
+    amount_tzs: int
+    active_methods: list[CheckoutMethodOut]
+    detected_provider: str | None = None
 
 
 class CheckoutOut(BaseModel):
