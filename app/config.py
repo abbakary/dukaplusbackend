@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     super_admin_phone: str = "+255700000001"
     super_admin_sync_password: bool = True
 
+    clickpesa_client_id: str = ""
+    clickpesa_api_key: str = ""
+    clickpesa_checksum_secret: str = ""
+    clickpesa_api_base: str = "https://api.clickpesa.com/third-parties"
+
     @field_validator("environment", mode="before")
     @classmethod
     def default_environment_on_railway(cls, v: object) -> str:

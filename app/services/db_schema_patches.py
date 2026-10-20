@@ -21,6 +21,14 @@ _COLUMN_PATCHES: tuple[tuple[str, str, str, str | None], ...] = (
     ("sale_quotations", "branch_id", "VARCHAR(36)", None),
     ("sale_quotations", "quotation_date", "DATE", None),
     ("sale_quotations", "payment_terms", "VARCHAR(40)", "'immediate'"),
+    ("subscription_payments", "order_reference", "VARCHAR(24)", None),
+    ("subscription_payments", "clickpesa_id", "VARCHAR(64)", None),
+    ("subscription_payments", "phone_number", "VARCHAR(20)", None),
+    ("subscription_payments", "provider_channel", "VARCHAR(40)", None),
+    ("subscription_payments", "provider_status", "VARCHAR(30)", None),
+    ("subscription_payments", "provider_reference", "VARCHAR(100)", None),
+    ("subscription_payments", "provider_message", "VARCHAR(500)", None),
+    ("subscription_payments", "extend_months", "INTEGER", "1"),
 )
 
 _INDEX_PATCHES: tuple[str, ...] = (
@@ -28,6 +36,7 @@ _INDEX_PATCHES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_sales_acc_move_id ON sales (acc_move_id)",
     "CREATE INDEX IF NOT EXISTS ix_vendor_bills_branch_id ON vendor_bills (branch_id)",
     "CREATE INDEX IF NOT EXISTS ix_sale_quotations_branch_id ON sale_quotations (branch_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_subscription_payments_order_reference ON subscription_payments (order_reference)",
 )
 
 

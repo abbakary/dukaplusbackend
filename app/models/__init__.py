@@ -413,7 +413,7 @@ class PlatformPlan(Base):
 
 
 class SubscriptionPayment(Base):
-    """Provider-recorded tenant subscription payments (M-Pesa, bank, etc.)."""
+    """Provider-recorded tenant subscription payments (ClickPesa, manual admin, etc.)."""
     __tablename__ = "subscription_payments"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -423,6 +423,14 @@ class SubscriptionPayment(Base):
     amount_tzs: Mapped[float] = mapped_column(Float, default=0)
     payment_method: Mapped[str] = mapped_column(String(50), default="M-Pesa")
     reference: Mapped[str] = mapped_column(String(100), default="")
+    order_reference: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
+    clickpesa_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    phone_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    provider_channel: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    provider_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    provider_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    provider_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    extend_months: Mapped[int] = mapped_column(Integer, default=1)
     billing_cycle: Mapped[str] = mapped_column(String(20), default="monthly")
     status: Mapped[str] = mapped_column(String(20), default="completed")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

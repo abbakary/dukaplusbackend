@@ -113,42 +113,41 @@ def subscription_status_message(tenant: Tenant) -> str:
 
 
 async def subscription_block_detail(tenant: Tenant, db) -> dict:
-    """Structured 403 payload for login and API — includes Lipa / WhatsApp payment steps."""
-    from app.services.platform_billing import get_billing_settings
-
-    billing = await get_billing_settings(db)
-    lipa_num = billing.get("lipa_number", "0650124656")
-    lipa_name = billing.get("lipa_name", "DUKAPLUS")
-    lipa = f"{lipa_num} ({lipa_name})"
-    wa = billing.get("whatsapp_number", lipa_num)
-    note_en = billing.get("support_note_en") or ""
-    note_sw = billing.get("support_note_sw") or ""
+    """Structured 403 payload for login and API — directs user to in-app ClickPesa checkout."""
+    from app.services.clickpesa import clickpesa_configured
 
     past = days_past_expiry(tenant)
     g = grace_days()
+    online = clickpesa_configured()
 
     if tenant.status == TenantStatus.suspended:
         title_en = "Account access is blocked"
         title_sw = "Huduma imezuiwa"
-        message_en = (
-            f"{title_en}. Your shop subscription is not active. "
-            f"Pay via M-Pesa Lipa Namba {lipa}, then send your business name and payment reference "
-            f"on WhatsApp {wa} to restore access. {note_en}".strip()
-        )
-        message_sw = (
-            f"{title_sw}. Usajili wa duka hauko hai. "
-            f"Lipia kupitia Lipa Namba {lipa}, kisha tuma jina la biashara na kumbukumbu ya M-Pesa "
-            f"kwenye WhatsApp {wa} ili kufunguliwa tena. {note_sw}".strip()
-        )
+        if online:
+            message_en = (
+                f"{title_en}. Your shop subscription is not active. "
+                "Open DukaDigital → Settings → Plan and pay with M-Pesa (USSD push on your phone)."
+            )
+            message_sw = (
+                f"{title_sw}. Usajili wa duka hauko hai. "
+                "Fungua DukaDigital → Mipangilio → Malipo na lipia kwa M-Pesa kwenye simu yako."
+            )
+        else:
+            message_en = f"{title_en}. Contact DukaDigital support to renew your subscription."
+            message_sw = f"{title_sw}. Wasiliana na msaada wa DukaDigital ili kufanya upya usajili."
     elif past is not None and past > g:
-        message_en = (
-            f"Your free trial or subscription has expired. Pay via Lipa {lipa}, "
-            f"then WhatsApp {wa} with your M-Pesa reference to continue using POS and reports. {note_en}"
-        ).strip()
-        message_sw = (
-            f"Jaribio la bure au usajili umeisha. Lipia Lipa {lipa}, "
-            f"kisha WhatsApp {wa} na kumbukumbu ya M-Pesa ili kuendelea kutumia POS na ripoti. {note_sw}"
-        ).strip()
+        if online:
+            message_en = (
+                "Your free trial or subscription has expired. "
+                "Go to Settings → Plan and complete payment via M-Pesa to restore POS and reports."
+            )
+            message_sw = (
+                "Jaribio la bure au usajili umeisha. "
+                "Nenda Mipangilio → Malipo na kamilisha malipo kwa M-Pesa ili kufungua tena POS na ripoti."
+            )
+        else:
+            message_en = "Your subscription has expired. Contact support to renew."
+            message_sw = "Usajili umeisha. Wasiliana na msaada ili kufanya upya."
     else:
         message_en = subscription_status_message(tenant)
         message_sw = message_en
@@ -158,11 +157,8 @@ async def subscription_block_detail(tenant: Tenant, db) -> dict:
         "message": message_en,
         "message_sw": message_sw,
         "status": tenant.status.value,
-        "lipa_number": lipa_num,
-        "lipa_name": lipa_name,
-        "whatsapp_number": wa,
-        "support_note_en": note_en,
-        "support_note_sw": note_sw,
+        "payments_online": online,
+        "payment_provider": "clickpesa",
     }
 
 

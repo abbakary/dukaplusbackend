@@ -9,12 +9,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_roles, require_tenant
+from app.models import StaffRole
 from app.services.platform_billing import get_billing_settings, get_grace_days
 from app.database import get_db
 from app.models import (
     PlatformBroadcast,
     PlatformPlan,
     SaaSPlanTier,
+    StaffRole,
     SubscriptionPayment,
     Tenant,
     TenantStatus,
@@ -180,6 +182,329 @@ def _broadcast_out(b: PlatformBroadcast) -> BroadcastOut:
         delivery_count=b.delivery_count,
         status=b.status,
     )
+
+
+def _require_subscription_payer(user: User) -> None:
+    if user.role == UserRole.vendor_owner:
+        return
+    if user.role == UserRole.super_admin:
+        raise HTTPException(status_code=403, detail="Super admin cannot pay tenant subscriptions here")
+    if user.staff and user.staff.role in (StaffRole.owner, StaffRole.manager):
+        return
+    raise HTTPException(status_code=403, detail="Only shop owner or manager can pay for subscription")
+
+
+class CheckoutPreviewIn(BaseModel):
+    plan_tier: SaaSPlanTier | None = None
+    billing_cycle: str = "monthly"
+    phone_number: str
+
+
+class CheckoutPushIn(BaseModel):
+    plan_tier: SaaSPlanTier | None = None
+    billing_cycle: str = "monthly"
+    phone_number: str
+
+
+class CheckoutMethodOut(BaseModel):
+    name: str
+    status: str
+    fee: int | None = None
+
+
+class CheckoutOut(BaseModel):
+    order_reference: str
+    amount_tzs: int
+    currency: str = "TZS"
+    status: str
+    clickpesa_id: str | None = None
+    channel: str | None = None
+    message_en: str = ""
+    message_sw: str = ""
+    active_methods: list[CheckoutMethodOut] = []
+    payment_id: str
+
+
+class CheckoutStatusOut(BaseModel):
+    order_reference: str
+    status: str
+    provider_status: str | None = None
+    subscription_expiry: str | None = None
+    tenant_status: str | None = None
+    message: str = ""
+
+
+class TenantPaymentOut(BaseModel):
+    id: str
+    amount_tzs: float
+    billing_cycle: str
+    status: str
+    payment_method: str
+    order_reference: str | None
+    created_at: str
+    plan: str
+
+
+async def _resolve_checkout_plan(db: AsyncSession, tenant: Tenant, tier: SaaSPlanTier | None) -> PlatformPlan:
+    target = tier or tenant.plan
+    result = await db.execute(select(PlatformPlan).where(PlatformPlan.tier == target))
+    plan = result.scalar_one_or_none()
+    if not plan:
+        plans = await _load_plans(db)
+        plan = next((p for p in plans if p.tier == target), None)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if plan.contact_us:
+        raise HTTPException(status_code=400, detail="Contact sales for this plan")
+    return plan
+
+
+async def _sync_checkout_from_clickpesa(
+    db: AsyncSession, payment: SubscriptionPayment, tenant: Tenant
+) -> SubscriptionPayment:
+    from app.services.clickpesa import query_payment_by_order_reference
+    from app.services.subscription_checkout import (
+        SUCCESS_STATUSES,
+        apply_subscription_payment_success,
+        mark_subscription_payment_failed,
+    )
+
+    if not payment.order_reference or payment.status == "completed":
+        return payment
+    rows = await query_payment_by_order_reference(payment.order_reference)
+    if not rows:
+        return payment
+    latest = rows[0]
+    provider_status = str(latest.get("status") or "").upper()
+    payment.provider_status = provider_status
+    payment.clickpesa_id = str(latest.get("id") or payment.clickpesa_id or "")[:64] or payment.clickpesa_id
+    if latest.get("paymentReference"):
+        payment.reference = str(latest["paymentReference"])[:100]
+    channel = str(latest.get("channel") or payment.provider_channel or "ClickPesa")
+    if provider_status in SUCCESS_STATUSES:
+        await apply_subscription_payment_success(
+            db,
+            payment,
+            tenant=tenant,
+            provider_reference=str(latest.get("paymentReference") or ""),
+            channel=channel,
+            provider_status=provider_status,
+        )
+    elif provider_status == "FAILED":
+        await mark_subscription_payment_failed(
+            db,
+            payment,
+            message=str(latest.get("message") or ""),
+            provider_status=provider_status,
+        )
+    return payment
+
+
+@router.post("/tenant/subscription/checkout/preview", response_model=CheckoutOut)
+async def tenant_checkout_preview(
+    body: CheckoutPreviewIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    from app.services.clickpesa import clickpesa_configured, make_order_reference, phone_for_clickpesa, preview_ussd_push
+    from app.services.subscription_checkout import extend_months_for_cycle, resolve_checkout_amount
+
+    if not clickpesa_configured():
+        raise HTTPException(status_code=503, detail="Online payment is not configured yet")
+    _require_subscription_payer(user)
+    tenant_id = require_tenant(user)
+    tenant = await db.get(Tenant, tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    phone = phone_for_clickpesa(body.phone_number)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Invalid Tanzania mobile number")
+
+    cycle = "yearly" if body.billing_cycle == "yearly" else "monthly"
+    plan = await _resolve_checkout_plan(db, tenant, body.plan_tier)
+    amount = resolve_checkout_amount(plan, cycle)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Invalid plan amount")
+
+    order_ref = make_order_reference()
+    preview = await preview_ussd_push(amount_tzs=amount, order_reference=order_ref, phone_number=phone)
+    methods = [
+        CheckoutMethodOut(
+            name=str(m.get("name") or ""),
+            status=str(m.get("status") or ""),
+            fee=int(m["fee"]) if m.get("fee") is not None else None,
+        )
+        for m in (preview.get("activeMethods") or [])
+        if isinstance(m, dict)
+    ]
+
+    payment = SubscriptionPayment(
+        tenant_id=tenant.id,
+        tenant_name=tenant.name,
+        plan=plan.tier,
+        amount_tzs=amount,
+        payment_method="ClickPesa",
+        order_reference=order_ref,
+        phone_number=phone,
+        billing_cycle=cycle,
+        extend_months=extend_months_for_cycle(cycle),
+        status="pending",
+    )
+    db.add(payment)
+    await db.flush()
+
+    return CheckoutOut(
+        order_reference=order_ref,
+        amount_tzs=amount,
+        status="preview",
+        active_methods=methods,
+        payment_id=payment.id,
+        message_en="Confirm your phone number, then tap Pay to receive the M-Pesa / mobile money prompt.",
+        message_sw="Thibitisha namba ya simu, kisha bonyeza Lipa kupokea ombi la M-Pesa kwenye simu yako.",
+    )
+
+
+@router.post("/tenant/subscription/checkout/push", response_model=CheckoutOut)
+async def tenant_checkout_push(
+    body: CheckoutPushIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    from app.services.clickpesa import clickpesa_configured, initiate_ussd_push, make_order_reference, phone_for_clickpesa
+    from app.services.subscription_checkout import extend_months_for_cycle, resolve_checkout_amount
+
+    if not clickpesa_configured():
+        raise HTTPException(status_code=503, detail="Online payment is not configured yet")
+    _require_subscription_payer(user)
+    tenant_id = require_tenant(user)
+    tenant = await db.get(Tenant, tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    phone = phone_for_clickpesa(body.phone_number)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Invalid Tanzania mobile number")
+
+    cycle = "yearly" if body.billing_cycle == "yearly" else "monthly"
+    plan = await _resolve_checkout_plan(db, tenant, body.plan_tier)
+    amount = resolve_checkout_amount(plan, cycle)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Invalid plan amount")
+
+    order_ref = make_order_reference()
+    payment = SubscriptionPayment(
+        tenant_id=tenant.id,
+        tenant_name=tenant.name,
+        plan=plan.tier,
+        amount_tzs=amount,
+        payment_method="ClickPesa",
+        order_reference=order_ref,
+        phone_number=phone,
+        billing_cycle=cycle,
+        extend_months=extend_months_for_cycle(cycle),
+        status="processing",
+    )
+    db.add(payment)
+    await db.flush()
+
+    try:
+        result = await initiate_ussd_push(
+            amount_tzs=amount,
+            order_reference=order_ref,
+            phone_number=phone,
+        )
+    except Exception as exc:
+        payment.status = "failed"
+        payment.provider_message = str(exc)[:500]
+        await db.flush()
+        raise HTTPException(status_code=502, detail="Could not start mobile payment. Try again.") from exc
+
+    payment.clickpesa_id = str(result.get("id") or "")[:64] or None
+    payment.provider_channel = str(result.get("channel") or "")[:40] or None
+    payment.provider_status = str(result.get("status") or "PROCESSING")
+    await db.flush()
+
+    return CheckoutOut(
+        order_reference=order_ref,
+        amount_tzs=amount,
+        status=str(result.get("status") or "PROCESSING").lower(),
+        clickpesa_id=payment.clickpesa_id,
+        channel=payment.provider_channel,
+        payment_id=payment.id,
+        message_en="Check your phone — approve the M-Pesa / mobile money request to complete payment.",
+        message_sw="Angalia simu yako — kubali ombi la M-Pesa ili kukamilisha malipo.",
+    )
+
+
+@router.get("/tenant/subscription/checkout/{order_reference}", response_model=CheckoutStatusOut)
+async def tenant_checkout_status(
+    order_reference: str,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    from app.services.subscription_checkout import get_payment_by_order_reference
+
+    _require_subscription_payer(user)
+    tenant_id = require_tenant(user)
+    payment = await get_payment_by_order_reference(db, order_reference[:24])
+    if not payment or payment.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    tenant = await db.get(Tenant, tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    if payment.status != "completed":
+        try:
+            payment = await _sync_checkout_from_clickpesa(db, payment, tenant)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+
+    expiry = (
+        tenant.subscription_expiry.date().isoformat()
+        if tenant.subscription_expiry
+        else None
+    )
+    return CheckoutStatusOut(
+        order_reference=payment.order_reference or order_reference,
+        status=payment.status,
+        provider_status=payment.provider_status,
+        subscription_expiry=expiry,
+        tenant_status=tenant.status.value,
+        message=payment.provider_message or "",
+    )
+
+
+@router.get("/tenant/subscription/payments", response_model=list[TenantPaymentOut])
+async def tenant_subscription_payments(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    _require_subscription_payer(user)
+    tenant_id = require_tenant(user)
+    result = await db.execute(
+        select(SubscriptionPayment)
+        .where(SubscriptionPayment.tenant_id == tenant_id)
+        .order_by(SubscriptionPayment.created_at.desc())
+        .limit(20)
+    )
+    out: list[TenantPaymentOut] = []
+    for p in result.scalars().all():
+        out.append(
+            TenantPaymentOut(
+                id=p.id,
+                amount_tzs=p.amount_tzs,
+                billing_cycle=p.billing_cycle,
+                status=p.status,
+                payment_method=p.payment_method,
+                order_reference=p.order_reference,
+                created_at=p.created_at.strftime("%Y-%m-%d %H:%M"),
+                plan=p.plan.value,
+            )
+        )
+    return out
 
 
 async def _load_plans(db: AsyncSession) -> list[PlatformPlan]:
@@ -459,8 +784,8 @@ async def tenant_subscription_nudge(
 
     shop = tenant.name or "Your shop"
     billing = await get_billing_settings(db)
-    lipa = f"{billing.get('lipa_number', '0650124656')} ({billing.get('lipa_name', 'DUKAPLUS')})"
-    wa = billing.get("whatsapp_number", "0650124656")
+    pay_hint_en = "Pay instantly in Settings → Plan with M-Pesa (USSD push on your phone)."
+    pay_hint_sw = "Lipa papo hapo kwenye Mipangilio → Malipo kwa M-Pesa (ombi kwenye simu yako)."
 
     if admin_fresh and admin_row:
         return SubscriptionNudgeOut(
@@ -477,13 +802,8 @@ async def tenant_subscription_nudge(
     if in_grace or past_grace_window:
         title_en = "Grace period — renew now"
         title_sw = "Muda wa rehema — lipia haraka"
-        message_en = (
-            f"{shop}: your subscription expired. Renew via Lipa {lipa} and WhatsApp {wa} "
-            "before access is blocked."
-        )
-        message_sw = (
-            f"{shop}: usajili umeisha. Lipia Lipa {lipa} na WhatsApp {wa} kabla huduma kusitishwa."
-        )
+        message_en = f"{shop}: your subscription expired. {pay_hint_en}"
+        message_sw = f"{shop}: usajili umeisha. {pay_hint_sw}"
         return SubscriptionNudgeOut(
             show=True,
             days_left=days_left,
@@ -499,13 +819,8 @@ async def tenant_subscription_nudge(
     day_label_sw = "leo" if days_left == 0 else f"baada ya siku {days_left}"
     title_en = f"Plan ends {day_label_en}"
     title_sw = f"Usajili unaisha {day_label_sw}"
-    message_en = (
-        f"{shop}: pay now to avoid interruption to POS, inventory, and reports. "
-        f"Lipa {lipa} · WhatsApp {wa}."
-    )
-    message_sw = (
-        f"{shop}: lipia sasa kuepuka kukatwa POS, stoo na ripoti. Lipa {lipa} · WhatsApp {wa}."
-    )
+    message_en = f"{shop}: pay now to avoid interruption to POS, inventory, and reports. {pay_hint_en}"
+    message_sw = f"{shop}: lipia sasa kuepuka kukatwa POS, stoo na ripoti. {pay_hint_sw}"
     return SubscriptionNudgeOut(
         show=True,
         days_left=days_left,
@@ -528,6 +843,8 @@ class BillingSettingsOut(BaseModel):
     whatsapp_number: str
     support_note_en: str
     support_note_sw: str
+    payments_online: bool = False
+    payment_provider: str = "clickpesa"
 
 
 class BillingSettingsUpdate(BaseModel):
@@ -540,11 +857,21 @@ class BillingSettingsUpdate(BaseModel):
     support_note_sw: str | None = None
 
 
+def _billing_settings_out(raw: dict) -> BillingSettingsOut:
+    from app.services.clickpesa import clickpesa_configured
+
+    return BillingSettingsOut(
+        **raw,
+        payments_online=clickpesa_configured(),
+        payment_provider="clickpesa",
+    )
+
+
 @router.get("/platform/billing-settings", response_model=BillingSettingsOut)
 async def public_billing_settings(db: Annotated[AsyncSession, Depends(get_db)]):
     from app.services.platform_billing import get_billing_settings
 
-    return BillingSettingsOut(**await get_billing_settings(db))
+    return _billing_settings_out(await get_billing_settings(db))
 
 
 @router.get("/admin/billing-settings", response_model=BillingSettingsOut)
@@ -554,7 +881,7 @@ async def admin_get_billing_settings(
 ):
     from app.services.platform_billing import get_billing_settings
 
-    return BillingSettingsOut(**await get_billing_settings(db))
+    return _billing_settings_out(await get_billing_settings(db))
 
 
 @router.patch("/admin/billing-settings", response_model=BillingSettingsOut)
@@ -569,5 +896,5 @@ async def admin_patch_billing_settings(
     updated = await update_billing_settings(db, body.model_dump(exclude_unset=True))
     set_grace_days_cache(updated["grace_days"])
     await db.commit()
-    return BillingSettingsOut(**updated)
+    return _billing_settings_out(updated)
 

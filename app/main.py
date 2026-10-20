@@ -13,6 +13,7 @@ from app.api.v1 import (
     analytics,
     auth,
     billing,
+    clickpesa_webhooks,
     business,
     demo,
     documents,
@@ -108,6 +109,7 @@ app.include_router(demo.router, prefix="/api/v1")
 app.include_router(extended.router, prefix="/api/v1")
 app.include_router(platform.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
+app.include_router(clickpesa_webhooks.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(tenant_settings.router, prefix="/api/v1")
 app.include_router(tra_efd.router, prefix="/api/v1")
