@@ -371,11 +371,24 @@ async def tenant_checkout_push(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    from app.services.clickpesa import clickpesa_configured, initiate_ussd_push, make_order_reference, phone_for_clickpesa
+    from app.services.clickpesa import (
+        CLICKPESA_PRE_KYC_MAX_TZS,
+        ClickPesaError,
+        clickpesa_checksum_configured,
+        clickpesa_configured,
+        initiate_ussd_push,
+        make_order_reference,
+        phone_for_clickpesa,
+    )
     from app.services.subscription_checkout import extend_months_for_cycle, resolve_checkout_amount
 
     if not clickpesa_configured():
         raise HTTPException(status_code=503, detail="Online payment is not configured yet")
+    if not clickpesa_checksum_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Payment security (checksum) is not configured on the server. Set CLICKPESA_CHECKSUM_SECRET on Railway.",
+        )
     _require_subscription_payer(user)
     tenant_id = require_tenant(user)
     tenant = await db.get(Tenant, tenant_id)
@@ -391,6 +404,14 @@ async def tenant_checkout_push(
     amount = resolve_checkout_amount(plan, cycle)
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid plan amount")
+    if amount > CLICKPESA_PRE_KYC_MAX_TZS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Plan amount TZS {amount:,} exceeds ClickPesa pre-KYC limit (TZS {CLICKPESA_PRE_KYC_MAX_TZS:,}). "
+                "Complete ClickPesa KYC or choose Starter until approved."
+            ),
+        )
 
     order_ref = make_order_reference()
     payment = SubscriptionPayment(
@@ -414,6 +435,11 @@ async def tenant_checkout_push(
             order_reference=order_ref,
             phone_number=phone,
         )
+    except ClickPesaError as exc:
+        payment.status = "failed"
+        payment.provider_message = str(exc)[:500]
+        await db.flush()
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         payment.status = "failed"
         payment.provider_message = str(exc)[:500]
