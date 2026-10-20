@@ -21,6 +21,58 @@ _TOKEN_CACHE: dict[str, Any] = {"token": None, "expires_at": 0.0}
 # Pre-KYC ClickPesa accounts: max TZS 100,000 per collection (see ClickPesa quickstart).
 CLICKPESA_PRE_KYC_MAX_TZS = 100_000
 
+DEFAULT_MOBILE_CHANNELS: tuple[str, ...] = (
+    "M-PESA",
+    "TIGO-PESA",
+    "AIRTEL-MONEY",
+    "HALOPESA",
+)
+
+
+def normalize_payment_channel(name: str | None) -> str | None:
+    if not name or not str(name).strip():
+        return None
+    raw = str(name).upper().replace("_", "-").replace(" ", "").strip()
+    aliases = {
+        "MPESA": "M-PESA",
+        "M-PESA": "M-PESA",
+        "TIGOPESA": "TIGO-PESA",
+        "TIGO-PESA": "TIGO-PESA",
+        "MIXX": "TIGO-PESA",
+        "MIXXBYYAS": "TIGO-PESA",
+        "AIRTELMONEY": "AIRTEL-MONEY",
+        "AIRTEL-MONEY": "AIRTEL-MONEY",
+        "HALOPESA": "HALOPESA",
+        "HALOTEL": "HALOPESA",
+    }
+    compact = raw.replace("-", "")
+    for key, canonical in aliases.items():
+        if raw == key or compact == key.replace("-", ""):
+            return canonical
+    if raw in DEFAULT_MOBILE_CHANNELS:
+        return raw
+    return str(name).upper().strip()
+
+
+def merge_active_methods(raw: list[Any] | None) -> list[dict[str, Any]]:
+    """Ensure all TZ wallets show in UI; overlay ClickPesa availability."""
+    merged: dict[str, dict[str, Any]] = {
+        ch: {"name": ch, "status": "UNAVAILABLE", "fee": None} for ch in DEFAULT_MOBILE_CHANNELS
+    }
+    if raw:
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            canonical = normalize_payment_channel(str(item.get("name") or ""))
+            if not canonical or canonical not in merged:
+                continue
+            merged[canonical] = {
+                "name": canonical,
+                "status": str(item.get("status") or "UNAVAILABLE"),
+                "fee": item.get("fee"),
+            }
+    return [merged[ch] for ch in DEFAULT_MOBILE_CHANNELS]
+
 
 class ClickPesaError(Exception):
     """ClickPesa HTTP/API failure with a safe message for clients."""
@@ -35,6 +87,26 @@ class ClickPesaError(Exception):
         super().__init__(message)
         self.status_code = status_code
         self.provider_body = provider_body
+
+
+def validate_payment_channel_choice(
+    selected: str | None,
+    active_methods: list[Any],
+    detected_provider: str | None = None,
+) -> str:
+    channel = normalize_payment_channel(selected) or "M-PESA"
+    methods = merge_active_methods(active_methods if isinstance(active_methods, list) else None)
+    available = {normalize_payment_channel(m["name"]) for m in methods if m.get("status") == "AVAILABLE"}
+    if channel not in available:
+        raise ClickPesaError(
+            f"{channel} is not available for this number or amount. Pick another wallet or check your phone number.",
+        )
+    detected = normalize_payment_channel(detected_provider)
+    if detected and detected != channel:
+        raise ClickPesaError(
+            f"This number is registered as {detected}. Switch to {detected} or use a {channel} number.",
+        )
+    return channel
 
 
 def _clickpesa_api_base() -> str:
@@ -195,6 +267,7 @@ async def preview_ussd_push(
     amount_tzs: int,
     order_reference: str,
     phone_number: str | None = None,
+    fetch_sender_details: bool = False,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "amount": str(int(amount_tzs)),
@@ -203,6 +276,8 @@ async def preview_ussd_push(
     }
     if phone_number:
         payload["phoneNumber"] = phone_number
+    if fetch_sender_details:
+        payload["fetchSenderDetails"] = True
     body = _with_checksum(payload)
     return await _post_json("/payments/preview-ussd-push-request", body)
 

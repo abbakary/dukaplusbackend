@@ -204,6 +204,19 @@ class CheckoutPushIn(BaseModel):
     plan_tier: SaaSPlanTier | None = None
     billing_cycle: str = "monthly"
     phone_number: str
+    payment_channel: str | None = None
+
+
+class CheckoutMethodsIn(BaseModel):
+    plan_tier: SaaSPlanTier | None = None
+    billing_cycle: str = "monthly"
+    phone_number: str
+
+
+class CheckoutMethodsOut(BaseModel):
+    amount_tzs: int
+    active_methods: list[CheckoutMethodOut]
+    detected_provider: str | None = None
 
 
 class CheckoutMethodOut(BaseModel):
@@ -300,6 +313,67 @@ async def _sync_checkout_from_clickpesa(
     return payment
 
 
+@router.post("/tenant/subscription/checkout/methods", response_model=CheckoutMethodsOut)
+async def tenant_checkout_methods(
+    body: CheckoutMethodsIn,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    from app.services.clickpesa import (
+        clickpesa_configured,
+        make_order_reference,
+        merge_active_methods,
+        normalize_payment_channel,
+        phone_for_clickpesa,
+        preview_ussd_push,
+    )
+    from app.services.subscription_checkout import resolve_checkout_amount
+
+    if not clickpesa_configured():
+        raise HTTPException(status_code=503, detail="Online payment is not configured yet")
+    _require_subscription_payer(user)
+    tenant_id = require_tenant(user)
+    tenant = await db.get(Tenant, tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    phone = phone_for_clickpesa(body.phone_number)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Invalid Tanzania mobile number")
+
+    cycle = "yearly" if body.billing_cycle == "yearly" else "monthly"
+    plan = await _resolve_checkout_plan(db, tenant, body.plan_tier)
+    amount = resolve_checkout_amount(plan, cycle)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Invalid plan amount")
+
+    try:
+        preview = await preview_ussd_push(
+            amount_tzs=amount,
+            order_reference=make_order_reference(),
+            phone_number=phone,
+            fetch_sender_details=True,
+        )
+    except ClickPesaError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    merged = merge_active_methods(preview.get("activeMethods") if isinstance(preview.get("activeMethods"), list) else None)
+    sender = preview.get("sender") if isinstance(preview.get("sender"), dict) else {}
+    detected = normalize_payment_channel(str(sender.get("accountProvider") or "")) if sender else None
+
+    return CheckoutMethodsOut(
+        amount_tzs=amount,
+        active_methods=[
+            CheckoutMethodOut(
+                name=str(m.get("name") or ""),
+                status=str(m.get("status") or ""),
+                fee=int(m["fee"]) if m.get("fee") is not None else None,
+            )
+            for m in merged
+        ],
+        detected_provider=detected,
+    )
+
+
 @router.post("/tenant/subscription/checkout/preview", response_model=CheckoutOut)
 async def tenant_checkout_preview(
     body: CheckoutPreviewIn,
@@ -378,7 +452,10 @@ async def tenant_checkout_push(
         clickpesa_configured,
         initiate_ussd_push,
         make_order_reference,
+        normalize_payment_channel,
         phone_for_clickpesa,
+        preview_ussd_push,
+        validate_payment_channel_choice,
     )
     from app.services.subscription_checkout import extend_months_for_cycle, resolve_checkout_amount
 
@@ -413,18 +490,36 @@ async def tenant_checkout_push(
             ),
         )
 
+    try:
+        preview = await preview_ussd_push(
+            amount_tzs=amount,
+            order_reference=make_order_reference(),
+            phone_number=phone,
+            fetch_sender_details=True,
+        )
+        sender = preview.get("sender") if isinstance(preview.get("sender"), dict) else {}
+        detected = normalize_payment_channel(str(sender.get("accountProvider") or "")) if sender else None
+        channel = validate_payment_channel_choice(
+            body.payment_channel,
+            preview.get("activeMethods") if isinstance(preview.get("activeMethods"), list) else None,
+            detected,
+        )
+    except ClickPesaError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     order_ref = make_order_reference()
     payment = SubscriptionPayment(
         tenant_id=tenant.id,
         tenant_name=tenant.name,
         plan=plan.tier,
         amount_tzs=amount,
-        payment_method="ClickPesa",
+        payment_method=channel,
         order_reference=order_ref,
         phone_number=phone,
         billing_cycle=cycle,
         extend_months=extend_months_for_cycle(cycle),
         status="processing",
+        provider_channel=channel[:40],
     )
     db.add(payment)
     await db.flush()
@@ -447,7 +542,7 @@ async def tenant_checkout_push(
         raise HTTPException(status_code=502, detail="Could not start mobile payment. Try again.") from exc
 
     payment.clickpesa_id = str(result.get("id") or "")[:64] or None
-    payment.provider_channel = str(result.get("channel") or "")[:40] or None
+    payment.provider_channel = str(result.get("channel") or channel)[:40] or None
     payment.provider_status = str(result.get("status") or "PROCESSING")
     await db.flush()
 
@@ -456,7 +551,7 @@ async def tenant_checkout_push(
         amount_tzs=amount,
         status=str(result.get("status") or "PROCESSING").lower(),
         clickpesa_id=payment.clickpesa_id,
-        channel=payment.provider_channel,
+        channel=payment.provider_channel or channel,
         payment_id=payment.id,
         message_en="Check your phone — approve the M-Pesa / mobile money request to complete payment.",
         message_sw="Angalia simu yako — kubali ombi la M-Pesa ili kukamilisha malipo.",
