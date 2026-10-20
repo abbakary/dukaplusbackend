@@ -146,6 +146,11 @@ def _clickpesa_timeout() -> httpx.Timeout:
     return httpx.Timeout(connect=25.0, read=45.0, write=25.0, pool=25.0)
 
 
+def _clickpesa_client(**kwargs: Any) -> httpx.AsyncClient:
+    """Ignore HTTP_PROXY env on Railway — it often breaks outbound HTTPS to ClickPesa."""
+    return httpx.AsyncClient(timeout=_clickpesa_timeout(), trust_env=False, **kwargs)
+
+
 def _raise_clickpesa_transport_error(exc: BaseException, *, url: str) -> None:
     logger.error("ClickPesa HTTP transport error for %s: %s", url, exc)
     if isinstance(exc, httpx.ConnectTimeout):
@@ -241,7 +246,7 @@ async def _get_bearer_token() -> str:
     url = f"{_clickpesa_api_base()}/generate-token"
 
     async def _fetch_token() -> httpx.Response:
-        async with httpx.AsyncClient(timeout=_clickpesa_timeout()) as client:
+        async with _clickpesa_client() as client:
             return await client.post(
                 url,
                 headers={
@@ -292,7 +297,7 @@ async def _post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
     url = f"{_clickpesa_api_base()}{path}"
 
     async def _post() -> httpx.Response:
-        async with httpx.AsyncClient(timeout=_clickpesa_timeout()) as client:
+        async with _clickpesa_client() as client:
             return await client.post(
                 url,
                 json=body,
@@ -356,7 +361,7 @@ async def query_payment_by_order_reference(order_reference: str) -> list[dict[st
     token = await _get_bearer_token()
     ref = order_reference[:20]
     url = f"{_clickpesa_api_base()}/payments/{ref}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with _clickpesa_client(timeout=httpx.Timeout(30.0)) as client:
         res = await client.get(url, headers={"Authorization": token})
         if res.status_code == 404:
             return []

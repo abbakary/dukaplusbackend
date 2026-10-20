@@ -1,5 +1,6 @@
 """SaaS plans, subscription payments, and provider broadcasts."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -27,6 +28,7 @@ from app.plan_catalog import DEFAULT_PLANS, SHARED_FEATURES, SHARED_FEATURES_SW
 from app.seed_plans import seed_platform_plans
 
 router = APIRouter(tags=["billing"])
+logger = logging.getLogger(__name__)
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -223,6 +225,7 @@ class CheckoutMethodsOut(BaseModel):
     amount_tzs: int
     active_methods: list[CheckoutMethodOut]
     detected_provider: str | None = None
+    provider_message: str | None = None
 
 
 class CheckoutOut(BaseModel):
@@ -320,6 +323,7 @@ async def tenant_checkout_methods(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     from app.services.clickpesa import (
+        ClickPesaError,
         clickpesa_configured,
         make_order_reference,
         merge_active_methods,
@@ -347,6 +351,8 @@ async def tenant_checkout_methods(
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid plan amount")
 
+    provider_message: str | None = None
+    detected: str | None = None
     try:
         preview = await preview_ussd_push(
             amount_tzs=amount,
@@ -354,11 +360,17 @@ async def tenant_checkout_methods(
             phone_number=phone,
             fetch_sender_details=True,
         )
+        merged = merge_active_methods(
+            preview.get("activeMethods") if isinstance(preview.get("activeMethods"), list) else None
+        )
+        sender = preview.get("sender") if isinstance(preview.get("sender"), dict) else {}
+        detected = normalize_payment_channel(str(sender.get("accountProvider") or "")) if sender else None
     except ClickPesaError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    merged = merge_active_methods(preview.get("activeMethods") if isinstance(preview.get("activeMethods"), list) else None)
-    sender = preview.get("sender") if isinstance(preview.get("sender"), dict) else {}
-    detected = normalize_payment_channel(str(sender.get("accountProvider") or "")) if sender else None
+        logger.warning("ClickPesa checkout methods unavailable: %s", exc)
+        provider_message = str(exc)
+        merged = merge_active_methods(None)
+        for m in merged:
+            m["status"] = "AVAILABLE"
 
     return CheckoutMethodsOut(
         amount_tzs=amount,
@@ -371,6 +383,7 @@ async def tenant_checkout_methods(
             for m in merged
         ],
         detected_provider=detected,
+        provider_message=provider_message,
     )
 
 
@@ -380,7 +393,14 @@ async def tenant_checkout_preview(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    from app.services.clickpesa import clickpesa_configured, make_order_reference, phone_for_clickpesa, preview_ussd_push
+    from app.services.clickpesa import (
+        ClickPesaError,
+        clickpesa_configured,
+        make_order_reference,
+        merge_active_methods,
+        phone_for_clickpesa,
+        preview_ussd_push,
+    )
     from app.services.subscription_checkout import extend_months_for_cycle, resolve_checkout_amount
 
     if not clickpesa_configured():
@@ -402,14 +422,16 @@ async def tenant_checkout_preview(
         raise HTTPException(status_code=400, detail="Invalid plan amount")
 
     order_ref = make_order_reference()
-    from app.services.clickpesa import merge_active_methods
 
-    preview = await preview_ussd_push(
-        amount_tzs=amount,
-        order_reference=order_ref,
-        phone_number=phone,
-        fetch_sender_details=True,
-    )
+    try:
+        preview = await preview_ussd_push(
+            amount_tzs=amount,
+            order_reference=order_ref,
+            phone_number=phone,
+            fetch_sender_details=True,
+        )
+    except ClickPesaError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     merged = merge_active_methods(
         preview.get("activeMethods") if isinstance(preview.get("activeMethods"), list) else None
     )

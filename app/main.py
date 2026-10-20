@@ -2,7 +2,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import logging
 
-from fastapi import FastAPI
+import httpx
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -90,6 +91,34 @@ app = FastAPI(
     description="Duka+ SaaS ERP API — Production backend for Tanzania retail, pharmacy, and multi-business management",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(httpx.ConnectTimeout)
+@app.exception_handler(httpx.ReadTimeout)
+@app.exception_handler(httpx.NetworkError)
+async def clickpesa_transport_exception_handler(_request: Request, exc: BaseException):
+    logger.exception("Unhandled outbound HTTP error")
+    detail = (
+        "Payment provider is unreachable from the server (connection timed out). "
+        "Verify CLICKPESA_API_BASE is https://api.clickpesa.com/third-parties and retry."
+    )
+    if isinstance(exc, httpx.ConnectTimeout):
+        detail = (
+            "Timed out connecting to ClickPesa from the server. "
+            "Check Railway outbound HTTPS and CLICKPESA_* credentials, then redeploy."
+        )
+    return JSONResponse(status_code=502, content={"detail": detail})
+
+
+try:
+    from app.services.clickpesa import ClickPesaError
+
+    @app.exception_handler(ClickPesaError)
+    async def clickpesa_api_exception_handler(_request: Request, exc: ClickPesaError):
+        code = 502 if exc.status_code is None or exc.status_code >= 500 else 400
+        return JSONResponse(status_code=code, content={"detail": str(exc)})
+except ImportError:
+    pass
 
 app.add_middleware(
     CORSMiddleware,
