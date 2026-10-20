@@ -97,7 +97,7 @@ app = FastAPI(
 @app.exception_handler(httpx.ReadTimeout)
 @app.exception_handler(httpx.NetworkError)
 async def clickpesa_transport_exception_handler(_request: Request, exc: BaseException):
-    logger.exception("Unhandled outbound HTTP error")
+    logger.warning("Unhandled outbound HTTP error: %s", exc)
     detail = (
         "Payment provider is unreachable from the server (connection timed out). "
         "Verify CLICKPESA_API_BASE is https://api.clickpesa.com/third-parties and retry."
@@ -180,6 +180,33 @@ async def health_detailed():
     payload = await get_system_status()
     status_code = 200 if payload["status"] == "ok" else 503
     return JSONResponse(content=payload, status_code=status_code)
+
+
+@app.get("/api/health/clickpesa")
+async def health_clickpesa():
+    """Outbound connectivity to ClickPesa (does not expose secrets)."""
+    from app.services.clickpesa import ClickPesaError, _clickpesa_api_base, clickpesa_configured
+
+    base = _clickpesa_api_base()
+    if not clickpesa_configured():
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_configured",
+                "api_base": base,
+                "detail": "Set CLICKPESA_CLIENT_ID and CLICKPESA_API_KEY on Railway.",
+            },
+        )
+    try:
+        from app.services.clickpesa import _get_bearer_token
+
+        await _get_bearer_token()
+        return {"status": "ok", "api_base": base}
+    except ClickPesaError as exc:
+        return JSONResponse(
+            status_code=502,
+            content={"status": "error", "api_base": base, "detail": str(exc)},
+        )
 
 
 @app.get("/api/ready")
