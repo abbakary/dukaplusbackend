@@ -402,15 +402,24 @@ async def tenant_checkout_preview(
         raise HTTPException(status_code=400, detail="Invalid plan amount")
 
     order_ref = make_order_reference()
-    preview = await preview_ussd_push(amount_tzs=amount, order_reference=order_ref, phone_number=phone)
+    from app.services.clickpesa import merge_active_methods
+
+    preview = await preview_ussd_push(
+        amount_tzs=amount,
+        order_reference=order_ref,
+        phone_number=phone,
+        fetch_sender_details=True,
+    )
+    merged = merge_active_methods(
+        preview.get("activeMethods") if isinstance(preview.get("activeMethods"), list) else None
+    )
     methods = [
         CheckoutMethodOut(
             name=str(m.get("name") or ""),
             status=str(m.get("status") or ""),
             fee=int(m["fee"]) if m.get("fee") is not None else None,
         )
-        for m in (preview.get("activeMethods") or [])
-        if isinstance(m, dict)
+        for m in merged
     ]
 
     payment = SubscriptionPayment(
