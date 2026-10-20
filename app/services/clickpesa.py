@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import logging
 import secrets
 import time
-from typing import Any
+from typing import Any, Callable, Coroutine, TypeVar
 
 import httpx
 
@@ -141,6 +142,43 @@ def _invalidate_token_cache() -> None:
     _TOKEN_CACHE["expires_at"] = 0.0
 
 
+def _clickpesa_timeout() -> httpx.Timeout:
+    return httpx.Timeout(connect=25.0, read=45.0, write=25.0, pool=25.0)
+
+
+def _raise_clickpesa_transport_error(exc: BaseException, *, url: str) -> None:
+    logger.error("ClickPesa HTTP transport error for %s: %s", url, exc)
+    if isinstance(exc, httpx.ConnectTimeout):
+        raise ClickPesaError(
+            "Timed out connecting to ClickPesa. Check CLICKPESA_API_BASE on Railway "
+            "(use https://api.clickpesa.com/third-parties) and try again.",
+        ) from exc
+    if isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
+        raise ClickPesaError("ClickPesa API timed out. Please try again in a moment.") from exc
+    if isinstance(exc, httpx.NetworkError):
+        raise ClickPesaError(
+            "Network error reaching ClickPesa. Verify outbound HTTPS from Railway is allowed.",
+        ) from exc
+    raise ClickPesaError(f"ClickPesa request failed: {exc}") from exc
+
+
+T = TypeVar("T")
+
+
+async def _with_transport_retry(coro_fn: Callable[[], Coroutine[Any, Any, T]]) -> T:
+    last: BaseException | None = None
+    for attempt in range(2):
+        try:
+            return await coro_fn()
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as exc:
+            last = exc
+            if attempt == 0:
+                await asyncio.sleep(1.5)
+                continue
+            raise last
+    raise RuntimeError("unreachable")
+
+
 def canonicalize(obj: Any) -> Any:
     if obj is None or not isinstance(obj, (dict, list)):
         return obj
@@ -201,32 +239,40 @@ async def _get_bearer_token() -> str:
         return str(cached)
 
     url = f"{_clickpesa_api_base()}/generate-token"
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        res = await client.post(
-            url,
-            headers={
-                "client-id": settings.clickpesa_client_id,
-                "api-key": settings.clickpesa_api_key,
-            },
-        )
-        if res.status_code >= 400:
-            msg = _parse_clickpesa_error(res.status_code, res.text)
-            logger.warning("ClickPesa token failed: %s %s", res.status_code, res.text[:500])
-            raise ClickPesaError(
-                msg,
-                status_code=res.status_code,
-                provider_body=res.text[:500],
+
+    async def _fetch_token() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=_clickpesa_timeout()) as client:
+            return await client.post(
+                url,
+                headers={
+                    "client-id": settings.clickpesa_client_id,
+                    "api-key": settings.clickpesa_api_key,
+                },
             )
-        data = res.json()
-        token = data.get("token")
-        if not token:
-            raise ClickPesaError("ClickPesa token response missing token")
-        token_str = str(token).strip()
-        if not token_str.lower().startswith("bearer "):
-            token_str = f"Bearer {token_str}"
-        _TOKEN_CACHE["token"] = token_str
-        _TOKEN_CACHE["expires_at"] = now + 55 * 60
-        return token_str
+
+    try:
+        res = await _with_transport_retry(_fetch_token)
+    except BaseException as exc:
+        _raise_clickpesa_transport_error(exc, url=url)
+
+    if res.status_code >= 400:
+        msg = _parse_clickpesa_error(res.status_code, res.text)
+        logger.warning("ClickPesa token failed: %s %s", res.status_code, res.text[:500])
+        raise ClickPesaError(
+            msg,
+            status_code=res.status_code,
+            provider_body=res.text[:500],
+        )
+    data = res.json()
+    token = data.get("token")
+    if not token:
+        raise ClickPesaError("ClickPesa token response missing token")
+    token_str = str(token).strip()
+    if not token_str.lower().startswith("bearer "):
+        token_str = f"Bearer {token_str}"
+    _TOKEN_CACHE["token"] = token_str
+    _TOKEN_CACHE["expires_at"] = now + 55 * 60
+    return token_str
 
 
 def _with_checksum(payload: dict[str, Any]) -> dict[str, Any]:
@@ -244,22 +290,30 @@ def _with_checksum(payload: dict[str, Any]) -> dict[str, Any]:
 async def _post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
     token = await _get_bearer_token()
     url = f"{_clickpesa_api_base()}{path}"
-    async with httpx.AsyncClient(timeout=45.0) as client:
-        res = await client.post(
-            url,
-            json=body,
-            headers={"Authorization": token, "Content-Type": "application/json"},
-        )
-        if res.status_code == 401:
-            _invalidate_token_cache()
-        if res.status_code >= 400:
-            msg = _parse_clickpesa_error(res.status_code, res.text)
-            logger.warning("ClickPesa POST %s failed: %s %s", path, res.status_code, res.text[:500])
-            raise ClickPesaError(msg, status_code=res.status_code, provider_body=res.text[:500])
-        data = res.json()
-        if isinstance(data, dict):
-            return data
-        return {"data": data}
+
+    async def _post() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=_clickpesa_timeout()) as client:
+            return await client.post(
+                url,
+                json=body,
+                headers={"Authorization": token, "Content-Type": "application/json"},
+            )
+
+    try:
+        res = await _with_transport_retry(_post)
+    except BaseException as exc:
+        _raise_clickpesa_transport_error(exc, url=url)
+
+    if res.status_code == 401:
+        _invalidate_token_cache()
+    if res.status_code >= 400:
+        msg = _parse_clickpesa_error(res.status_code, res.text)
+        logger.warning("ClickPesa POST %s failed: %s %s", path, res.status_code, res.text[:500])
+        raise ClickPesaError(msg, status_code=res.status_code, provider_body=res.text[:500])
+    data = res.json()
+    if isinstance(data, dict):
+        return data
+    return {"data": data}
 
 
 async def preview_ussd_push(

@@ -514,7 +514,8 @@ async def tenant_checkout_push(
             detected,
         )
     except ClickPesaError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        code = 502 if exc.status_code is None or exc.status_code >= 500 else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
 
     order_ref = make_order_reference()
     payment = SubscriptionPayment(
