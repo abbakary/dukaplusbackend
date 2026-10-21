@@ -7,13 +7,17 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import socket
 import time
+from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, TypeVar
 from urllib.parse import urlparse, urlunparse
 
 import httpx
+import requests
+from requests import exceptions as requests_exc
 
 from app.config import settings
 
@@ -144,6 +148,51 @@ def _invalidate_token_cache() -> None:
     _TOKEN_CACHE["expires_at"] = 0.0
 
 
+def railway_egress_hint() -> str:
+    if not os.environ.get("RAILWAY_ENVIRONMENT", "").strip():
+        return ""
+    return (
+        " Railway fix: backend Service → Settings → Networking → turn OFF Static Outbound IPs → redeploy. "
+        "Static IPs often break third-party HTTPS (works on your PC, times out on Railway)."
+    )
+
+
+@dataclass
+class _ClickPesaHttpResponse:
+    status_code: int
+    text: str
+
+    def json(self) -> Any:
+        return json.loads(self.text)
+
+
+def _requests_proxies() -> dict[str, str] | None:
+    proxy = (settings.clickpesa_https_proxy or "").strip()
+    if not proxy:
+        return None
+    return {"http": proxy, "https": proxy}
+
+
+def _sync_clickpesa_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    json_body: dict[str, Any] | None = None,
+) -> _ClickPesaHttpResponse:
+    """Same stack as ClickPesa Python docs (requests + Session)."""
+    connect = float(settings.clickpesa_connect_timeout_seconds or 45.0)
+    timeout = (connect, 60.0)
+    session = requests.Session()
+    session.trust_env = bool(settings.clickpesa_trust_env)
+    proxies = _requests_proxies()
+    if method.upper() == "POST":
+        res = session.post(url, headers=headers, json=json_body, timeout=timeout, proxies=proxies)
+    else:
+        res = session.get(url, headers=headers, timeout=timeout, proxies=proxies)
+    return _ClickPesaHttpResponse(status_code=res.status_code, text=res.text)
+
+
 def _clickpesa_timeout() -> httpx.Timeout:
     connect = float(settings.clickpesa_connect_timeout_seconds or 45.0)
     return httpx.Timeout(connect=connect, read=60.0, write=connect, pool=connect)
@@ -205,55 +254,85 @@ async def _clickpesa_http_request(
     *,
     headers: dict[str, str] | None = None,
     json_body: dict[str, Any] | None = None,
-) -> httpx.Response:
+) -> _ClickPesaHttpResponse:
     req_headers = dict(headers or {})
     hostname = urlparse(url).hostname or ""
 
-    async def _send(target_url: str, extra_headers: dict[str, str]) -> httpx.Response:
+    async def _via_requests(target_url: str, extra_headers: dict[str, str]) -> _ClickPesaHttpResponse:
+        merged = {**req_headers, **extra_headers}
+
+        def _call() -> _ClickPesaHttpResponse:
+            return _sync_clickpesa_request(method, target_url, headers=merged, json_body=json_body)
+
+        return await asyncio.to_thread(_call)
+
+    last_exc: BaseException | None = None
+    for attempt in range(2):
+        try:
+            return await _via_requests(url, {})
+        except (requests_exc.Timeout, requests_exc.ConnectionError) as exc:
+            last_exc = exc
+            if attempt == 0:
+                await asyncio.sleep(1.5)
+                continue
+            break
+
+    if hostname and last_exc is not None:
+        ipv4 = await _resolve_ipv4(hostname)
+        if ipv4:
+            logger.info("ClickPesa requests retry via IPv4 %s (host %s)", ipv4, hostname)
+            target, host_header = _url_for_ipv4(url, ipv4)
+            try:
+                return await _via_requests(target, host_header)
+            except (requests_exc.Timeout, requests_exc.ConnectionError) as exc:
+                last_exc = exc
+
+    if last_exc is not None:
+        raise last_exc
+
+    async def _httpx_send(target_url: str, extra_headers: dict[str, str]) -> _ClickPesaHttpResponse:
         merged = {**req_headers, **extra_headers}
         async with _clickpesa_client() as client:
-            return await client.request(method, target_url, headers=merged, json=json_body)
+            res = await client.request(method, target_url, headers=merged, json=json_body)
+        return _ClickPesaHttpResponse(status_code=res.status_code, text=res.text)
 
-    async def _primary() -> httpx.Response:
-        return await _send(url, {})
+    async def _httpx_primary() -> _ClickPesaHttpResponse:
+        return await _httpx_send(url, {})
 
-    try:
-        return await _with_transport_retry(_primary)
-    except (httpx.ConnectTimeout, httpx.NetworkError) as first_exc:
-        if not hostname:
-            raise first_exc
-        ipv4 = await _resolve_ipv4(hostname)
-        if not ipv4:
-            raise first_exc
-        logger.info("ClickPesa connect retry via IPv4 %s (host %s)", ipv4, hostname)
-        target, host_header = _url_for_ipv4(url, ipv4)
+    return await _with_transport_retry(_httpx_primary)
 
-        async def _via_ipv4() -> httpx.Response:
-            return await _send(target, host_header)
 
-        try:
-            return await _with_transport_retry(_via_ipv4)
-        except BaseException:
-            raise first_exc
+def _is_connect_failure(exc: BaseException) -> bool:
+    if isinstance(exc, (httpx.ConnectTimeout, httpx.NetworkError)):
+        return True
+    return isinstance(
+        exc,
+        (
+            requests_exc.ConnectTimeout,
+            requests_exc.ConnectionError,
+            requests_exc.Timeout,
+        ),
+    )
 
 
 def _raise_clickpesa_transport_error(exc: BaseException, *, url: str) -> None:
-    logger.error("ClickPesa HTTP transport error for %s: %s", url, exc)
-    if isinstance(exc, httpx.ConnectTimeout):
+    logger.error(
+        "ClickPesa HTTP transport error for %s: %s (%s)",
+        url,
+        exc or type(exc).__name__,
+        type(exc).__name__,
+    )
+    hint = railway_egress_hint()
+    if _is_connect_failure(exc):
         raise ClickPesaError(
             "Timed out connecting to ClickPesa from this server. "
-            "Open GET /api/health/clickpesa on your backend for a connectivity report. "
-            "If TCP fails, ClickPesa may block your host's outbound IP — ask ClickPesa support "
-            "or set CLICKPESA_HTTPS_PROXY to a Tanzania HTTPS proxy. "
-            "CLICKPESA_API_BASE should be https://api.clickpesa.com/third-parties.",
+            "Check GET /api/health/clickpesa. "
+            "CLICKPESA_API_BASE should be https://api.clickpesa.com/third-parties."
+            f"{hint}",
         ) from exc
     if isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
-        raise ClickPesaError("ClickPesa API timed out. Please try again in a moment.") from exc
-    if isinstance(exc, httpx.NetworkError):
-        raise ClickPesaError(
-            "Network error reaching ClickPesa. Verify outbound HTTPS from Railway is allowed.",
-        ) from exc
-    raise ClickPesaError(f"ClickPesa request failed: {exc}") from exc
+        raise ClickPesaError(f"ClickPesa API timed out. Please try again.{hint}") from exc
+    raise ClickPesaError(f"ClickPesa request failed: {exc}{hint}") from exc
 
 
 T = TypeVar("T")

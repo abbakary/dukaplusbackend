@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 import logging
+import os
 
 import httpx
 from fastapi import FastAPI, Request
@@ -192,6 +193,7 @@ async def health_clickpesa():
         _resolve_ipv4,
         clickpesa_configured,
         probe_clickpesa_tcp,
+        railway_egress_hint,
     )
 
     base = _clickpesa_api_base()
@@ -220,6 +222,10 @@ async def health_clickpesa():
         "outbound_ip": outbound_ip,
         "https_proxy_set": bool((settings.clickpesa_https_proxy or "").strip()),
         "trust_env": bool(settings.clickpesa_trust_env),
+        "on_railway": bool(os.environ.get("RAILWAY_ENVIRONMENT", "").strip()),
+        "railway_fix_hint": (
+            "Disable Static Outbound IPs: Service → Settings → Networking → off → redeploy."
+        ),
     }
 
     if not clickpesa_configured():
@@ -236,16 +242,8 @@ async def health_clickpesa():
         await _get_bearer_token()
         return {**report, "status": "ok", "token": "ok"}
     except ClickPesaError as exc:
-        hint = (
-            "Direct TCP to ClickPesa failed; if this worked before, set CLICKPESA_TRUST_ENV=true "
-            "(default) so httpx uses Railway HTTP(S)_PROXY. Share outbound_ip with ClickPesa if needed."
-        )
-        if not tcp.get("ok"):
-            detail = f"{exc} — {hint}"
-            status = "tcp_unreachable"
-        else:
-            detail = str(exc)
-            status = "error"
+        detail = f"{exc}{railway_egress_hint()}".strip()
+        status = "tcp_unreachable" if not tcp.get("ok") else "error"
         return JSONResponse(
             status_code=502,
             content={**report, "status": status, "detail": detail},
