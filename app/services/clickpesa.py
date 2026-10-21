@@ -150,9 +150,14 @@ def _clickpesa_timeout() -> httpx.Timeout:
 
 
 def _clickpesa_client(**kwargs: Any) -> httpx.AsyncClient:
-    """Ignore HTTP_PROXY env on Railway — it often breaks outbound HTTPS to ClickPesa."""
     proxy = (settings.clickpesa_https_proxy or "").strip() or None
-    return httpx.AsyncClient(timeout=_clickpesa_timeout(), trust_env=False, proxy=proxy, **kwargs)
+    trust_env = bool(settings.clickpesa_trust_env)
+    return httpx.AsyncClient(
+        timeout=_clickpesa_timeout(),
+        trust_env=trust_env,
+        proxy=proxy,
+        **kwargs,
+    )
 
 
 async def _resolve_ipv4(hostname: str) -> str | None:

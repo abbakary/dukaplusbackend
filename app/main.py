@@ -219,6 +219,7 @@ async def health_clickpesa():
         "tcp_ipv4_direct": tcp_ipv4,
         "outbound_ip": outbound_ip,
         "https_proxy_set": bool((settings.clickpesa_https_proxy or "").strip()),
+        "trust_env": bool(settings.clickpesa_trust_env),
     }
 
     if not clickpesa_configured():
@@ -231,26 +232,23 @@ async def health_clickpesa():
             },
         )
 
-    if not tcp.get("ok"):
-        return JSONResponse(
-            status_code=502,
-            content={
-                **report,
-                "status": "tcp_unreachable",
-                "detail": (
-                    "This server cannot open TCP to api.clickpesa.com:443. "
-                    "Share outbound_ip with ClickPesa support or use CLICKPESA_HTTPS_PROXY."
-                ),
-            },
-        )
-
     try:
         await _get_bearer_token()
         return {**report, "status": "ok", "token": "ok"}
     except ClickPesaError as exc:
+        hint = (
+            "Direct TCP to ClickPesa failed; if this worked before, set CLICKPESA_TRUST_ENV=true "
+            "(default) so httpx uses Railway HTTP(S)_PROXY. Share outbound_ip with ClickPesa if needed."
+        )
+        if not tcp.get("ok"):
+            detail = f"{exc} — {hint}"
+            status = "tcp_unreachable"
+        else:
+            detail = str(exc)
+            status = "error"
         return JSONResponse(
             status_code=502,
-            content={**report, "status": "error", "detail": str(exc)},
+            content={**report, "status": status, "detail": detail},
         )
 
 

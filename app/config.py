@@ -102,6 +102,8 @@ class Settings(BaseSettings):
     """Optional HTTPS proxy (e.g. TZ VPS) if Railway cannot reach api.clickpesa.com directly."""
     clickpesa_https_proxy: str = ""
     clickpesa_connect_timeout_seconds: float = 45.0
+    """When true (default), honor HTTP(S)_PROXY on the host — required on some Railway setups."""
+    clickpesa_trust_env: bool = True
 
     @field_validator("environment", mode="before")
     @classmethod
