@@ -185,27 +185,72 @@ async def health_detailed():
 @app.get("/api/health/clickpesa")
 async def health_clickpesa():
     """Outbound connectivity to ClickPesa (does not expose secrets)."""
-    from app.services.clickpesa import ClickPesaError, _clickpesa_api_base, clickpesa_configured
+    from app.services.clickpesa import (
+        ClickPesaError,
+        _clickpesa_api_base,
+        _get_bearer_token,
+        _resolve_ipv4,
+        clickpesa_configured,
+        probe_clickpesa_tcp,
+    )
 
     base = _clickpesa_api_base()
+    host = "api.clickpesa.com"
+    ipv4 = await _resolve_ipv4(host)
+    tcp = await probe_clickpesa_tcp(host=host)
+    if ipv4 and not tcp.get("ok"):
+        tcp_ipv4 = await probe_clickpesa_tcp(host=ipv4)
+    else:
+        tcp_ipv4 = None
+
+    outbound_ip: str | None = None
+    try:
+        async with httpx.AsyncClient(timeout=8.0, trust_env=False) as client:
+            ip_res = await client.get("https://api.ipify.org?format=json")
+            if ip_res.status_code == 200:
+                outbound_ip = str(ip_res.json().get("ip") or "") or None
+    except Exception:
+        outbound_ip = None
+
+    report: dict = {
+        "api_base": base,
+        "resolved_ipv4": ipv4,
+        "tcp": tcp,
+        "tcp_ipv4_direct": tcp_ipv4,
+        "outbound_ip": outbound_ip,
+        "https_proxy_set": bool((settings.clickpesa_https_proxy or "").strip()),
+    }
+
     if not clickpesa_configured():
         return JSONResponse(
             status_code=503,
             content={
+                **report,
                 "status": "not_configured",
-                "api_base": base,
                 "detail": "Set CLICKPESA_CLIENT_ID and CLICKPESA_API_KEY on Railway.",
             },
         )
-    try:
-        from app.services.clickpesa import _get_bearer_token
 
+    if not tcp.get("ok"):
+        return JSONResponse(
+            status_code=502,
+            content={
+                **report,
+                "status": "tcp_unreachable",
+                "detail": (
+                    "This server cannot open TCP to api.clickpesa.com:443. "
+                    "Share outbound_ip with ClickPesa support or use CLICKPESA_HTTPS_PROXY."
+                ),
+            },
+        )
+
+    try:
         await _get_bearer_token()
-        return {"status": "ok", "api_base": base}
+        return {**report, "status": "ok", "token": "ok"}
     except ClickPesaError as exc:
         return JSONResponse(
             status_code=502,
-            content={"status": "error", "api_base": base, "detail": str(exc)},
+            content={**report, "status": "error", "detail": str(exc)},
         )
 
 

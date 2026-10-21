@@ -99,6 +99,9 @@ class Settings(BaseSettings):
     clickpesa_api_key: str = ""
     clickpesa_checksum_secret: str = ""
     clickpesa_api_base: str = "https://api.clickpesa.com/third-parties"
+    """Optional HTTPS proxy (e.g. TZ VPS) if Railway cannot reach api.clickpesa.com directly."""
+    clickpesa_https_proxy: str = ""
+    clickpesa_connect_timeout_seconds: float = 45.0
 
     @field_validator("environment", mode="before")
     @classmethod

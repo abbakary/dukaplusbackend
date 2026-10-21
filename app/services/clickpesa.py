@@ -8,8 +8,10 @@ import hmac
 import json
 import logging
 import secrets
+import socket
 import time
 from typing import Any, Callable, Coroutine, TypeVar
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -143,20 +145,102 @@ def _invalidate_token_cache() -> None:
 
 
 def _clickpesa_timeout() -> httpx.Timeout:
-    return httpx.Timeout(connect=25.0, read=45.0, write=25.0, pool=25.0)
+    connect = float(settings.clickpesa_connect_timeout_seconds or 45.0)
+    return httpx.Timeout(connect=connect, read=60.0, write=connect, pool=connect)
 
 
 def _clickpesa_client(**kwargs: Any) -> httpx.AsyncClient:
     """Ignore HTTP_PROXY env on Railway — it often breaks outbound HTTPS to ClickPesa."""
-    return httpx.AsyncClient(timeout=_clickpesa_timeout(), trust_env=False, **kwargs)
+    proxy = (settings.clickpesa_https_proxy or "").strip() or None
+    return httpx.AsyncClient(timeout=_clickpesa_timeout(), trust_env=False, proxy=proxy, **kwargs)
+
+
+async def _resolve_ipv4(hostname: str) -> str | None:
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(
+            hostname,
+            443,
+            family=socket.AF_INET,
+            type=socket.SOCK_STREAM,
+        )
+        if infos:
+            return str(infos[0][4][0])
+    except OSError as exc:
+        logger.debug("IPv4 lookup failed for %s: %s", hostname, exc)
+    return None
+
+
+def _url_for_ipv4(url: str, ipv4: str) -> tuple[str, dict[str, str]]:
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    port = parsed.port
+    netloc = f"{ipv4}:{port}" if port else ipv4
+    rewritten = urlunparse(parsed._replace(netloc=netloc))
+    return rewritten, {"Host": host} if host else {}
+
+
+async def probe_clickpesa_tcp(*, host: str = "api.clickpesa.com", port: int = 443, timeout: float = 12.0) -> dict[str, Any]:
+    """TCP reachability check (no ClickPesa credentials)."""
+    started = time.monotonic()
+    try:
+        _reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+        writer.close()
+        await writer.wait_closed()
+        ms = int((time.monotonic() - started) * 1000)
+        return {"ok": True, "host": host, "port": port, "connect_ms": ms}
+    except Exception as exc:
+        ms = int((time.monotonic() - started) * 1000)
+        return {"ok": False, "host": host, "port": port, "connect_ms": ms, "error": str(exc)}
+
+
+async def _clickpesa_http_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    json_body: dict[str, Any] | None = None,
+) -> httpx.Response:
+    req_headers = dict(headers or {})
+    hostname = urlparse(url).hostname or ""
+
+    async def _send(target_url: str, extra_headers: dict[str, str]) -> httpx.Response:
+        merged = {**req_headers, **extra_headers}
+        async with _clickpesa_client() as client:
+            return await client.request(method, target_url, headers=merged, json=json_body)
+
+    async def _primary() -> httpx.Response:
+        return await _send(url, {})
+
+    try:
+        return await _with_transport_retry(_primary)
+    except (httpx.ConnectTimeout, httpx.NetworkError) as first_exc:
+        if not hostname:
+            raise first_exc
+        ipv4 = await _resolve_ipv4(hostname)
+        if not ipv4:
+            raise first_exc
+        logger.info("ClickPesa connect retry via IPv4 %s (host %s)", ipv4, hostname)
+        target, host_header = _url_for_ipv4(url, ipv4)
+
+        async def _via_ipv4() -> httpx.Response:
+            return await _send(target, host_header)
+
+        try:
+            return await _with_transport_retry(_via_ipv4)
+        except BaseException:
+            raise first_exc
 
 
 def _raise_clickpesa_transport_error(exc: BaseException, *, url: str) -> None:
     logger.error("ClickPesa HTTP transport error for %s: %s", url, exc)
     if isinstance(exc, httpx.ConnectTimeout):
         raise ClickPesaError(
-            "Timed out connecting to ClickPesa. Check CLICKPESA_API_BASE on Railway "
-            "(use https://api.clickpesa.com/third-parties) and try again.",
+            "Timed out connecting to ClickPesa from this server. "
+            "Open GET /api/health/clickpesa on your backend for a connectivity report. "
+            "If TCP fails, ClickPesa may block your host's outbound IP — ask ClickPesa support "
+            "or set CLICKPESA_HTTPS_PROXY to a Tanzania HTTPS proxy. "
+            "CLICKPESA_API_BASE should be https://api.clickpesa.com/third-parties.",
         ) from exc
     if isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
         raise ClickPesaError("ClickPesa API timed out. Please try again in a moment.") from exc
@@ -244,19 +328,15 @@ async def _get_bearer_token() -> str:
         return str(cached)
 
     url = f"{_clickpesa_api_base()}/generate-token"
-
-    async def _fetch_token() -> httpx.Response:
-        async with _clickpesa_client() as client:
-            return await client.post(
-                url,
-                headers={
-                    "client-id": settings.clickpesa_client_id,
-                    "api-key": settings.clickpesa_api_key,
-                },
-            )
-
     try:
-        res = await _with_transport_retry(_fetch_token)
+        res = await _clickpesa_http_request(
+            "POST",
+            url,
+            headers={
+                "client-id": settings.clickpesa_client_id,
+                "api-key": settings.clickpesa_api_key,
+            },
+        )
     except BaseException as exc:
         _raise_clickpesa_transport_error(exc, url=url)
 
@@ -296,16 +376,13 @@ async def _post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
     token = await _get_bearer_token()
     url = f"{_clickpesa_api_base()}{path}"
 
-    async def _post() -> httpx.Response:
-        async with _clickpesa_client() as client:
-            return await client.post(
-                url,
-                json=body,
-                headers={"Authorization": token, "Content-Type": "application/json"},
-            )
-
     try:
-        res = await _with_transport_retry(_post)
+        res = await _clickpesa_http_request(
+            "POST",
+            url,
+            headers={"Authorization": token, "Content-Type": "application/json"},
+            json_body=body,
+        )
     except BaseException as exc:
         _raise_clickpesa_transport_error(exc, url=url)
 
@@ -361,14 +438,22 @@ async def query_payment_by_order_reference(order_reference: str) -> list[dict[st
     token = await _get_bearer_token()
     ref = order_reference[:20]
     url = f"{_clickpesa_api_base()}/payments/{ref}"
-    async with _clickpesa_client(timeout=httpx.Timeout(30.0)) as client:
-        res = await client.get(url, headers={"Authorization": token})
-        if res.status_code == 404:
-            return []
-        res.raise_for_status()
-        data = res.json()
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            return [data]
+    try:
+        res = await _clickpesa_http_request(
+            "GET",
+            url,
+            headers={"Authorization": token},
+        )
+    except BaseException as exc:
+        _raise_clickpesa_transport_error(exc, url=url)
+    if res.status_code == 404:
         return []
+    if res.status_code >= 400:
+        msg = _parse_clickpesa_error(res.status_code, res.text)
+        raise ClickPesaError(msg, status_code=res.status_code, provider_body=res.text[:500])
+    data = res.json()
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return [data]
+    return []
