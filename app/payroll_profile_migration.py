@@ -16,9 +16,16 @@ async def migrate_payroll_contract_profile_column() -> None:
                     text("ALTER TABLE hr_payroll_contracts ADD COLUMN profile_json TEXT DEFAULT '{}'")
                 )
         else:
-            try:
+            exists = await conn.execute(
+                text(
+                    """
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'hr_payroll_contracts' AND column_name = 'profile_json'
+                    LIMIT 1
+                    """
+                )
+            )
+            if exists.first() is None:
                 await conn.execute(
                     text("ALTER TABLE hr_payroll_contracts ADD COLUMN profile_json TEXT DEFAULT '{}'")
                 )
-            except Exception:
-                pass

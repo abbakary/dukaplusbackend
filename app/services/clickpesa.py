@@ -17,13 +17,18 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 import requests
+from requests.adapters import HTTPAdapter
 from requests import exceptions as requests_exc
+from urllib3.util.retry import Retry
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 _TOKEN_CACHE: dict[str, Any] = {"token": None, "expires_at": 0.0}
+# After connect failures, avoid hammering ClickPesa (and long checkout waits).
+_CLICKPESA_COOLDOWN_UNTIL: float = 0.0
+_CLICKPESA_COOLDOWN_SECONDS = 120.0
 
 # Pre-KYC ClickPesa accounts: max TZS 100,000 per collection (see ClickPesa quickstart).
 CLICKPESA_PRE_KYC_MAX_TZS = 100_000
@@ -148,6 +153,15 @@ def _invalidate_token_cache() -> None:
     _TOKEN_CACHE["expires_at"] = 0.0
 
 
+def _mark_clickpesa_unreachable() -> None:
+    global _CLICKPESA_COOLDOWN_UNTIL
+    _CLICKPESA_COOLDOWN_UNTIL = time.time() + _CLICKPESA_COOLDOWN_SECONDS
+
+
+def clickpesa_in_cooldown() -> bool:
+    return time.time() < _CLICKPESA_COOLDOWN_UNTIL
+
+
 def railway_egress_hint() -> str:
     if not os.environ.get("RAILWAY_ENVIRONMENT", "").strip():
         return ""
@@ -181,10 +195,13 @@ def _sync_clickpesa_request(
     json_body: dict[str, Any] | None = None,
 ) -> _ClickPesaHttpResponse:
     """Same stack as ClickPesa Python docs (requests + Session)."""
-    connect = float(settings.clickpesa_connect_timeout_seconds or 45.0)
-    timeout = (connect, 60.0)
+    connect = float(settings.clickpesa_connect_timeout_seconds or 20.0)
+    timeout = (connect, 45.0)
     session = requests.Session()
     session.trust_env = bool(settings.clickpesa_trust_env)
+    no_retry = Retry(total=0, connect=0, read=0, redirect=0, status=0)
+    session.mount("https://", HTTPAdapter(max_retries=no_retry))
+    session.mount("http://", HTTPAdapter(max_retries=no_retry))
     proxies = _requests_proxies()
     if method.upper() == "POST":
         res = session.post(url, headers=headers, json=json_body, timeout=timeout, proxies=proxies)
@@ -256,7 +273,6 @@ async def _clickpesa_http_request(
     json_body: dict[str, Any] | None = None,
 ) -> _ClickPesaHttpResponse:
     req_headers = dict(headers or {})
-    hostname = urlparse(url).hostname or ""
 
     async def _via_requests(target_url: str, extra_headers: dict[str, str]) -> _ClickPesaHttpResponse:
         merged = {**req_headers, **extra_headers}
@@ -266,6 +282,7 @@ async def _clickpesa_http_request(
 
         return await asyncio.to_thread(_call)
 
+    # Always call https://api.clickpesa.com/... — do not rewrite to raw IP (breaks TLS SNI).
     last_exc: BaseException | None = None
     for attempt in range(2):
         try:
@@ -273,33 +290,13 @@ async def _clickpesa_http_request(
         except (requests_exc.Timeout, requests_exc.ConnectionError) as exc:
             last_exc = exc
             if attempt == 0:
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(1.0)
                 continue
             break
 
-    if hostname and last_exc is not None:
-        ipv4 = await _resolve_ipv4(hostname)
-        if ipv4:
-            logger.info("ClickPesa requests retry via IPv4 %s (host %s)", ipv4, hostname)
-            target, host_header = _url_for_ipv4(url, ipv4)
-            try:
-                return await _via_requests(target, host_header)
-            except (requests_exc.Timeout, requests_exc.ConnectionError) as exc:
-                last_exc = exc
-
     if last_exc is not None:
         raise last_exc
-
-    async def _httpx_send(target_url: str, extra_headers: dict[str, str]) -> _ClickPesaHttpResponse:
-        merged = {**req_headers, **extra_headers}
-        async with _clickpesa_client() as client:
-            res = await client.request(method, target_url, headers=merged, json=json_body)
-        return _ClickPesaHttpResponse(status_code=res.status_code, text=res.text)
-
-    async def _httpx_primary() -> _ClickPesaHttpResponse:
-        return await _httpx_send(url, {})
-
-    return await _with_transport_retry(_httpx_primary)
+    raise RuntimeError("unreachable")
 
 
 def _is_connect_failure(exc: BaseException) -> bool:
@@ -324,6 +321,7 @@ def _raise_clickpesa_transport_error(exc: BaseException, *, url: str) -> None:
     )
     hint = railway_egress_hint()
     if _is_connect_failure(exc):
+        _mark_clickpesa_unreachable()
         raise ClickPesaError(
             "Timed out connecting to ClickPesa from this server. "
             "Check GET /api/health/clickpesa. "
@@ -405,6 +403,12 @@ def phone_for_clickpesa(raw: str) -> str | None:
 async def _get_bearer_token() -> str:
     if not clickpesa_configured():
         raise RuntimeError("ClickPesa is not configured on the server")
+    if clickpesa_in_cooldown():
+        raise ClickPesaError(
+            "ClickPesa is unreachable from this server (recent connection failure). "
+            "Fix Railway networking (disable Static Outbound IPs) then wait 2 minutes or redeploy."
+            f"{railway_egress_hint()}",
+        )
 
     now = time.time()
     cached = _TOKEN_CACHE.get("token")
@@ -441,6 +445,8 @@ async def _get_bearer_token() -> str:
         token_str = f"Bearer {token_str}"
     _TOKEN_CACHE["token"] = token_str
     _TOKEN_CACHE["expires_at"] = now + 55 * 60
+    global _CLICKPESA_COOLDOWN_UNTIL
+    _CLICKPESA_COOLDOWN_UNTIL = 0.0
     return token_str
 
 

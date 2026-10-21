@@ -238,6 +238,31 @@ async def health_clickpesa():
             },
         )
 
+    from app.services.clickpesa import clickpesa_in_cooldown
+
+    if not tcp.get("ok"):
+        return JSONResponse(
+            status_code=502,
+            content={
+                **report,
+                "status": "tcp_unreachable",
+                "detail": (
+                    "Cannot reach api.clickpesa.com:443 from this host."
+                    f"{railway_egress_hint()}"
+                ),
+            },
+        )
+
+    if clickpesa_in_cooldown():
+        return JSONResponse(
+            status_code=502,
+            content={
+                **report,
+                "status": "cooldown",
+                "detail": "Recent ClickPesa failures; retry in ~2 minutes after fixing Railway networking.",
+            },
+        )
+
     try:
         await _get_bearer_token()
         return {**report, "status": "ok", "token": "ok"}
