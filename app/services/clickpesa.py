@@ -293,7 +293,8 @@ async def probe_clickpesa_tcp(*, host: str = "api.clickpesa.com", port: int = 44
         return {"ok": True, "host": host, "port": port, "connect_ms": ms}
     except Exception as exc:
         ms = int((time.monotonic() - started) * 1000)
-        return {"ok": False, "host": host, "port": port, "connect_ms": ms, "error": str(exc)}
+        err = str(exc).strip() or type(exc).__name__
+        return {"ok": False, "host": host, "port": port, "connect_ms": ms, "error": err}
 
 
 async def _clickpesa_http_request(

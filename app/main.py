@@ -227,7 +227,11 @@ async def health_clickpesa():
         "outbound_ip": outbound_ip,
         "https_proxy_set": bool((settings.clickpesa_https_proxy or "").strip()),
         "trust_env": bool(settings.clickpesa_trust_env),
+        "http_proxy_env_set": bool(
+            (os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or "").strip()
+        ),
         "on_railway": bool(os.environ.get("RAILWAY_ENVIRONMENT", "").strip()),
+        "outbound_ip_for_clickpesa_whitelist": outbound_ip,
         "railway_fix_hint": (
             "Disable Static Outbound IPs: Service → Settings → Networking → off → redeploy."
         ),

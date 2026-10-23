@@ -1048,21 +1048,29 @@ class BillingSettingsUpdate(BaseModel):
     support_note_sw: str | None = None
 
 
-def _billing_settings_out(raw: dict) -> BillingSettingsOut:
-    from app.services.clickpesa import clickpesa_configured
-
+def _billing_settings_out(raw: dict, *, payments_online: bool) -> BillingSettingsOut:
     return BillingSettingsOut(
         **raw,
-        payments_online=clickpesa_configured(),
-        payment_provider="clickpesa",
+        payments_online=payments_online,
+        payment_provider="clickpesa" if payments_online else "whatsapp",
     )
+
+
+async def _payments_online_now() -> bool:
+    from app.services.clickpesa import clickpesa_configured, probe_clickpesa_tcp
+
+    if not clickpesa_configured():
+        return False
+    tcp = await probe_clickpesa_tcp(timeout=6.0)
+    return bool(tcp.get("ok"))
 
 
 @router.get("/platform/billing-settings", response_model=BillingSettingsOut)
 async def public_billing_settings(db: Annotated[AsyncSession, Depends(get_db)]):
     from app.services.platform_billing import get_billing_settings
 
-    return _billing_settings_out(await get_billing_settings(db))
+    online = await _payments_online_now()
+    return _billing_settings_out(await get_billing_settings(db), payments_online=online)
 
 
 @router.get("/admin/billing-settings", response_model=BillingSettingsOut)
@@ -1072,7 +1080,8 @@ async def admin_get_billing_settings(
 ):
     from app.services.platform_billing import get_billing_settings
 
-    return _billing_settings_out(await get_billing_settings(db))
+    online = await _payments_online_now()
+    return _billing_settings_out(await get_billing_settings(db), payments_online=online)
 
 
 @router.patch("/admin/billing-settings", response_model=BillingSettingsOut)
@@ -1087,5 +1096,6 @@ async def admin_patch_billing_settings(
     updated = await update_billing_settings(db, body.model_dump(exclude_unset=True))
     set_grace_days_cache(updated["grace_days"])
     await db.commit()
-    return _billing_settings_out(updated)
+    online = await _payments_online_now()
+    return _billing_settings_out(updated, payments_online=online)
 
