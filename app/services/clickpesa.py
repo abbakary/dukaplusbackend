@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 _TOKEN_CACHE: dict[str, Any] = {"token": None, "expires_at": 0.0}
 # After connect failures, avoid hammering ClickPesa (and long checkout waits).
 _CLICKPESA_COOLDOWN_UNTIL: float = 0.0
-_CLICKPESA_COOLDOWN_SECONDS = 120.0
+_CLICKPESA_COOLDOWN_SECONDS = 45.0
 
 # Pre-KYC ClickPesa accounts: max TZS 100,000 per collection (see ClickPesa quickstart).
 CLICKPESA_PRE_KYC_MAX_TZS = 100_000
@@ -121,7 +121,7 @@ class ClickPesaError(Exception):
 def clickpesa_client_http_status(status_code: int | None) -> int:
     """Map ClickPesa HTTP codes to FastAPI responses (avoid 502 for validation errors)."""
     if status_code is None:
-        return 502
+        return 503
     if status_code == 401:
         return 503
     if 400 <= status_code < 500:
@@ -437,7 +437,7 @@ async def _get_bearer_token() -> str:
     if clickpesa_in_cooldown():
         raise ClickPesaError(
             "ClickPesa is unreachable from this server (recent connection failure). "
-            "Fix Railway networking (disable Static Outbound IPs) then wait 2 minutes or redeploy."
+            "Fix Railway networking (disable Static Outbound IPs) then wait ~45 seconds or redeploy."
             f"{railway_egress_hint()}",
         )
 

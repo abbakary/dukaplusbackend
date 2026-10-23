@@ -323,6 +323,7 @@ async def tenant_checkout_methods(
 ):
     from app.services.clickpesa import (
         ClickPesaError,
+        clickpesa_client_http_status,
         clickpesa_configured,
         make_order_reference,
         merge_active_methods,
@@ -350,7 +351,6 @@ async def tenant_checkout_methods(
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid plan amount")
 
-    provider_message: str | None = None
     detected: str | None = None
     try:
         preview = await preview_ussd_push(
@@ -367,10 +367,10 @@ async def tenant_checkout_methods(
         )
     except ClickPesaError as exc:
         logger.warning("ClickPesa checkout methods unavailable: %s", exc)
-        provider_message = str(exc)
-        merged = merge_active_methods(None)
-        for m in merged:
-            m["status"] = "AVAILABLE"
+        raise HTTPException(
+            status_code=clickpesa_client_http_status(exc.status_code),
+            detail=str(exc),
+        ) from exc
 
     return CheckoutMethodsOut(
         amount_tzs=amount,
@@ -383,7 +383,7 @@ async def tenant_checkout_methods(
             for m in merged
         ],
         detected_provider=detected,
-        provider_message=provider_message,
+        provider_message=None,
     )
 
 

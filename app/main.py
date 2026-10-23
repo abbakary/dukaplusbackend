@@ -116,8 +116,12 @@ try:
 
     @app.exception_handler(ClickPesaError)
     async def clickpesa_api_exception_handler(_request: Request, exc: ClickPesaError):
-        code = 502 if exc.status_code is None or exc.status_code >= 500 else 400
-        return JSONResponse(status_code=code, content={"detail": str(exc)})
+        from app.services.clickpesa import clickpesa_client_http_status
+
+        return JSONResponse(
+            status_code=clickpesa_client_http_status(exc.status_code),
+            content={"detail": str(exc)},
+        )
 except ImportError:
     pass
 
@@ -260,7 +264,7 @@ async def health_clickpesa():
             content={
                 **report,
                 "status": "cooldown",
-                "detail": "Recent ClickPesa failures; retry in ~2 minutes after fixing Railway networking.",
+                "detail": "Recent ClickPesa failures; retry in ~45 seconds after fixing Railway networking.",
             },
         )
 
