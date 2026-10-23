@@ -183,6 +183,7 @@ async def health_detailed():
     return JSONResponse(content=payload, status_code=status_code)
 
 
+@app.get("/health/clickpesa", include_in_schema=False)
 @app.get("/api/health/clickpesa")
 async def health_clickpesa():
     """Outbound connectivity to ClickPesa (does not expose secrets)."""
