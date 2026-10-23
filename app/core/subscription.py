@@ -113,34 +113,34 @@ def subscription_status_message(tenant: Tenant) -> str:
 
 
 async def subscription_block_detail(tenant: Tenant, db) -> dict:
-    """Structured 403 payload for login and API — directs user to WhatsApp billing."""
+    """Structured 403 payload for login and API — renew in-app or WhatsApp support."""
+    from app.services.clickpesa import clickpesa_configured
     from app.services.platform_billing import get_billing_settings
 
     past = days_past_expiry(tenant)
     g = grace_days()
     billing = await get_billing_settings(db)
     wa = (billing.get("whatsapp_number") or "").strip()
+    online = clickpesa_configured()
+    renew_hint_en = (
+        "Open Settings → Plan & Billing and pay with M-Pesa / mobile money."
+        if online
+        else f"Open Settings → Plan & Billing or message support on WhatsApp{f' ({wa})' if wa else ''}."
+    )
+    renew_hint_sw = (
+        "Fungua Mipangilio → Mpango & Malipo na lipa kwa M-Pesa / pesa ya simu."
+        if online
+        else f"Fungua Mipangilio → Mpango & Malipo au WhatsApp msaada{f' ({wa})' if wa else ''}."
+    )
 
     if tenant.status == TenantStatus.suspended:
         title_en = "Account access is blocked"
         title_sw = "Huduma imezuiwa"
-        message_en = (
-            f"{title_en}. Your shop subscription is not active. "
-            f"Open Settings → Plan & Billing or message DukaDigital on WhatsApp{f' ({wa})' if wa else ''} to renew."
-        )
-        message_sw = (
-            f"{title_sw}. Usajili wa duka hauko hai. "
-            f"Fungua Mipangilio → Mpango & Malipo au tuma WhatsApp DukaDigital{f' ({wa})' if wa else ''} ili kufanya upya."
-        )
+        message_en = f"{title_en}. Your shop subscription is not active. {renew_hint_en}"
+        message_sw = f"{title_sw}. Usajili wa duka hauko hai. {renew_hint_sw}"
     elif past is not None and past > g:
-        message_en = (
-            "Your free trial or subscription has expired. "
-            f"Go to Settings → Plan & Billing or contact us on WhatsApp{f' ({wa})' if wa else ''} to restore access."
-        )
-        message_sw = (
-            "Jaribio la bure au usajili umeisha. "
-            f"Nenda Mipangilio → Mpango & Malipo au wasiliana WhatsApp{f' ({wa})' if wa else ''} ili kufungua tena POS na ripoti."
-        )
+        message_en = f"Your free trial or subscription has expired. {renew_hint_en}"
+        message_sw = f"Jaribio la bure au usajili umeisha. {renew_hint_sw}"
     else:
         message_en = subscription_status_message(tenant)
         message_sw = message_en
@@ -151,8 +151,8 @@ async def subscription_block_detail(tenant: Tenant, db) -> dict:
         "message_sw": message_sw,
         "status": tenant.status.value,
         "whatsapp_number": wa or None,
-        "payments_online": False,
-        "payment_provider": "whatsapp",
+        "payments_online": online,
+        "payment_provider": "clickpesa" if online else "whatsapp",
     }
 
 

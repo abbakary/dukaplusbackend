@@ -30,15 +30,6 @@ from app.seed_plans import seed_platform_plans
 router = APIRouter(tags=["billing"])
 logger = logging.getLogger(__name__)
 
-_ONLINE_CHECKOUT_DISABLED = (
-    "Online payment gateway is disabled. Renew via WhatsApp — open Settings → Plan & Billing in the app or website."
-)
-
-
-def _reject_online_checkout() -> None:
-    raise HTTPException(status_code=503, detail=_ONLINE_CHECKOUT_DISABLED)
-
-
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 class PlanOut(BaseModel):
@@ -330,7 +321,6 @@ async def tenant_checkout_methods(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _reject_online_checkout()
     from app.services.clickpesa import (
         ClickPesaError,
         clickpesa_configured,
@@ -402,7 +392,6 @@ async def tenant_checkout_preview(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _reject_online_checkout()
     from app.services.clickpesa import (
         ClickPesaError,
         clickpesa_configured,
@@ -486,7 +475,6 @@ async def tenant_checkout_push(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _reject_online_checkout()
     from app.services.clickpesa import (
         CLICKPESA_PRE_KYC_MAX_TZS,
         ClickPesaError,

@@ -15,10 +15,10 @@ DEFAULT_BILLING = {
     "lipa_name": "DUKAPLUS",
     "whatsapp_number": "0650124656",
     "support_note_en": (
-        "After you pay, message us on WhatsApp with your business name, package, and M-Pesa reference."
+        "Questions about billing or your account? Message us on WhatsApp. In-app subscription uses M-Pesa / mobile money when ClickPesa is enabled."
     ),
     "support_note_sw": (
-        "Baada ya kulipa, tuma WhatsApp kwa jina la biashara, kifurushi, na kumbukumbu ya M-Pesa."
+        "Maswali kuhusu malipo au akaunti? Tuma WhatsApp. Usajili ndani ya programu hutumia M-Pesa / pesa ya simu ClickPesa inapowashwa."
     ),
 }
 
