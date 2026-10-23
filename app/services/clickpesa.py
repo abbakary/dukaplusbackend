@@ -32,6 +32,8 @@ _CLICKPESA_COOLDOWN_SECONDS = 120.0
 
 # Pre-KYC ClickPesa accounts: max TZS 100,000 per collection (see ClickPesa quickstart).
 CLICKPESA_PRE_KYC_MAX_TZS = 100_000
+# USSD collections below this often fail provider fee validation (use quickstart examples ≥ 1000).
+CLICKPESA_MIN_COLLECTION_TZS = 1_000
 
 DEFAULT_MOBILE_CHANNELS: tuple[str, ...] = (
     "M-PESA",
@@ -66,7 +68,10 @@ def normalize_payment_channel(name: str | None) -> str | None:
     return str(name).upper().strip()
 
 
-def merge_active_methods(raw: list[Any] | None) -> list[dict[str, Any]]:
+def merge_active_methods(
+    raw: list[Any] | None,
+    detected_provider: str | None = None,
+) -> list[dict[str, Any]]:
     """Ensure all TZ wallets show in UI; overlay ClickPesa availability."""
     merged: dict[str, dict[str, Any]] = {
         ch: {"name": ch, "status": "UNAVAILABLE", "fee": None} for ch in DEFAULT_MOBILE_CHANNELS
@@ -83,6 +88,18 @@ def merge_active_methods(raw: list[Any] | None) -> list[dict[str, Any]]:
                 "status": str(item.get("status") or "UNAVAILABLE"),
                 "fee": item.get("fee"),
             }
+
+    detected = normalize_payment_channel(detected_provider)
+    if detected and detected in merged:
+        merged[detected]["status"] = "AVAILABLE"
+
+    if not any(m.get("status") == "AVAILABLE" for m in merged.values()):
+        logger.info(
+            "ClickPesa returned no AVAILABLE wallets; enabling all for checkout UI (push routes by phone).",
+        )
+        for m in merged.values():
+            m["status"] = "AVAILABLE"
+
     return [merged[ch] for ch in DEFAULT_MOBILE_CHANNELS]
 
 
@@ -101,22 +118,36 @@ class ClickPesaError(Exception):
         self.provider_body = provider_body
 
 
+def clickpesa_client_http_status(status_code: int | None) -> int:
+    """Map ClickPesa HTTP codes to FastAPI responses (avoid 502 for validation errors)."""
+    if status_code is None:
+        return 502
+    if status_code == 401:
+        return 503
+    if 400 <= status_code < 500:
+        return 400
+    return 502
+
+
 def validate_payment_channel_choice(
     selected: str | None,
     active_methods: list[Any],
     detected_provider: str | None = None,
 ) -> str:
     channel = normalize_payment_channel(selected) or "M-PESA"
-    methods = merge_active_methods(active_methods if isinstance(active_methods, list) else None)
-    available = {normalize_payment_channel(m["name"]) for m in methods if m.get("status") == "AVAILABLE"}
-    if channel not in available:
-        raise ClickPesaError(
-            f"{channel} is not available for this number or amount. Pick another wallet or check your phone number.",
-        )
     detected = normalize_payment_channel(detected_provider)
     if detected and detected != channel:
         raise ClickPesaError(
             f"This number is registered as {detected}. Switch to {detected} or use a {channel} number.",
+        )
+    methods = merge_active_methods(
+        active_methods if isinstance(active_methods, list) else None,
+        detected,
+    )
+    available = {normalize_payment_channel(m["name"]) for m in methods if m.get("status") == "AVAILABLE"}
+    if available and channel not in available:
+        raise ClickPesaError(
+            f"{channel} is not available for this number or amount. Pick another wallet or check your phone number.",
         )
     return channel
 

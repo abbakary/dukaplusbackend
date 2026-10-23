@@ -359,11 +359,12 @@ async def tenant_checkout_methods(
             phone_number=phone,
             fetch_sender_details=True,
         )
-        merged = merge_active_methods(
-            preview.get("activeMethods") if isinstance(preview.get("activeMethods"), list) else None
-        )
         sender = preview.get("sender") if isinstance(preview.get("sender"), dict) else {}
         detected = normalize_payment_channel(str(sender.get("accountProvider") or "")) if sender else None
+        merged = merge_active_methods(
+            preview.get("activeMethods") if isinstance(preview.get("activeMethods"), list) else None,
+            detected,
+        )
     except ClickPesaError as exc:
         logger.warning("ClickPesa checkout methods unavailable: %s", exc)
         provider_message = str(exc)
@@ -431,8 +432,11 @@ async def tenant_checkout_preview(
         )
     except ClickPesaError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    sender = preview.get("sender") if isinstance(preview.get("sender"), dict) else {}
+    detected_preview = normalize_payment_channel(str(sender.get("accountProvider") or "")) if sender else None
     merged = merge_active_methods(
-        preview.get("activeMethods") if isinstance(preview.get("activeMethods"), list) else None
+        preview.get("activeMethods") if isinstance(preview.get("activeMethods"), list) else None,
+        detected_preview,
     )
     methods = [
         CheckoutMethodOut(
@@ -476,9 +480,11 @@ async def tenant_checkout_push(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     from app.services.clickpesa import (
+        CLICKPESA_MIN_COLLECTION_TZS,
         CLICKPESA_PRE_KYC_MAX_TZS,
         ClickPesaError,
         clickpesa_checksum_configured,
+        clickpesa_client_http_status,
         clickpesa_configured,
         initiate_ussd_push,
         make_order_reference,
@@ -519,11 +525,20 @@ async def tenant_checkout_push(
                 "Complete ClickPesa KYC or choose Starter until approved."
             ),
         )
+    if amount < CLICKPESA_MIN_COLLECTION_TZS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Plan amount TZS {amount:,} is below ClickPesa minimum (TZS {CLICKPESA_MIN_COLLECTION_TZS:,}). "
+                "Update plan pricing in Super Admin → Plans."
+            ),
+        )
 
+    order_ref = make_order_reference()
     try:
         preview = await preview_ussd_push(
             amount_tzs=amount,
-            order_reference=make_order_reference(),
+            order_reference=order_ref,
             phone_number=phone,
             fetch_sender_details=True,
         )
@@ -535,10 +550,16 @@ async def tenant_checkout_push(
             detected,
         )
     except ClickPesaError as exc:
-        code = 502 if exc.status_code is None or exc.status_code >= 500 else 400
-        raise HTTPException(status_code=code, detail=str(exc)) from exc
+        logger.warning(
+            "Subscription checkout push preview failed: %s (clickpesa_http=%s)",
+            exc,
+            exc.status_code,
+        )
+        raise HTTPException(
+            status_code=clickpesa_client_http_status(exc.status_code),
+            detail=str(exc),
+        ) from exc
 
-    order_ref = make_order_reference()
     payment = SubscriptionPayment(
         tenant_id=tenant.id,
         tenant_name=tenant.name,
@@ -556,6 +577,13 @@ async def tenant_checkout_push(
     await db.flush()
 
     try:
+        logger.info(
+            "ClickPesa initiate subscription push ref=%s amount=%s phone=***%s channel=%s",
+            order_ref,
+            amount,
+            phone[-4:] if len(phone) >= 4 else "****",
+            channel,
+        )
         result = await initiate_ussd_push(
             amount_tzs=amount,
             order_reference=order_ref,
@@ -565,11 +593,22 @@ async def tenant_checkout_push(
         payment.status = "failed"
         payment.provider_message = str(exc)[:500]
         await db.flush()
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        logger.warning(
+            "ClickPesa initiate failed ref=%s http=%s msg=%s body=%s",
+            order_ref,
+            exc.status_code,
+            exc,
+            (exc.provider_body or "")[:300],
+        )
+        raise HTTPException(
+            status_code=clickpesa_client_http_status(exc.status_code),
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         payment.status = "failed"
         payment.provider_message = str(exc)[:500]
         await db.flush()
+        logger.exception("ClickPesa initiate unexpected error ref=%s", order_ref)
         raise HTTPException(status_code=502, detail="Could not start mobile payment. Try again.") from exc
 
     payment.clickpesa_id = str(result.get("id") or "")[:64] or None
